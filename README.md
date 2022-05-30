@@ -11,7 +11,7 @@ Licence :  GPLv3
 # How to run:
 
 ```shell
-python python jtcam_bibtex_editing.py test.bib
+python jtcam_bibtex_editing.py test.bib
 ```
 
 
