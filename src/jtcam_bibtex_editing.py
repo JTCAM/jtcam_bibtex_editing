@@ -521,26 +521,36 @@ def add_tag_oai_url_in_entry(store_key, entry):
 
     oai_url = store_key['oai_url']
     entry['unpaywalloaiurl'] = oai_url
-
+    latex_tag = None
     
     if  store_key.get('oai_type') == 'arXiv':
         latex_tag='\\tagARXIV{'
         oai_url = store_key['oai_url_for_landing_page']
         print(oai_url)
     elif store_key.get('oai_type') == 'HAL':
-
+        
         fake_landing_page=  store_key['oai_url_for_landing_page']
-        hal_number = fake_landing_page.split('hal-')[1].split('/')[0]        
-        oai_url = 'hal-' + hal_number
-        print(oai_url)
-        latex_tag='\\tagHAL{'
+        #print('fake_landing_page', fake_landing_page)
+        fake_landing_page_split = fake_landing_page.split('hal-')
+        #print('fake_landing_page_split', fake_landing_page_split)
+        if len(fake_landing_page_split) > 1  :
+            hal_number = fake_landing_page.split('hal-')[1].split('/')[0]
+            oai_url = 'hal-' + hal_number
+            print(oai_url)
+            latex_tag='\\tagHAL{'
+        else:
+            print('no hal number')
+            latex_tag = '\\tagOAI{'
+            oai_url = fake_landing_page
+            print(oai_url)
     else:
         latex_tag='\\tagOAI{'
-    
-    if entry.get('addendum'):
-        entry['addendum'].append(latex_tag +  oai_url+ '}')
-    else:
-        entry['addendum']= [latex_tag +  oai_url + '}']
+
+    if latex_tag is not None:
+        if entry.get('addendum'):
+            entry['addendum'].append(latex_tag +  oai_url+ '}')
+        else:
+            entry['addendum']= [latex_tag +  oai_url + '}']
 
  
     return 'add oai'
@@ -569,13 +579,19 @@ def astyle_author_crossref_json(json_entry):
     author=d['author']
     #print(author)
     author_bibtex =[]
-    for a in author:
-        family = a['family']
 
+
+    for a in author:
+
+        family = a['family']
         if family.isupper():
             family = family.title()
-        given = a['given']
-        author_bibtex.append(family+ ', ' +given)
+            
+        if a.get('given', None) :     
+            given = a['given']
+            author_bibtex.append(family+ ', ' +given)
+        else:
+            author_bibtex.append(family)
 
     author_bibtex = ' and ' .join(author_bibtex)
     #print('author_bibtex', author_bibtex)
@@ -971,6 +987,19 @@ cartrigde = \
 
 line_prepender(output_file, cartrigde)
 
+import fileinput
+tempFile = open( output_file, 'r+' )
+
+text_to_replace =[('$\mathsemicolon$', ';')]
+
+for item in text_to_replace:
+    for line in fileinput.input( output_file ):
+        if item[0] in line :
+            print('Match Found. replace ', item[0], ' by ', item[1])
+        #else:
+        #    print('Match Not Found!!')
+        tempFile.write( line.replace( item[0], item[1] ) )
+    tempFile.close()
 
         
     
