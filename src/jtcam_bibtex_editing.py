@@ -1,5 +1,5 @@
 # /*
-# * This simple pyhton script uses the API of crossref and unpaywall to reformat author's bibtex file, addind verified doi and oai on open access ressources.
+# * This simple python script uses the API of crossref and unpaywall to reformat author's bibtex file, addind verified doi and oai on open access ressources.
 # * Copyright (C) 2022 Vincent Acary
 # *
 # * This program is free software: you can redistribute it and/or modify
@@ -322,13 +322,24 @@ def unpywall_doi(doi):
 
 
 def unpaywall_get_oai_url(doi_query):
+    oai_url='oai url not found'
+    status='oai url not found'
+
+    if doi_query.get('best_oa_location.url_for_pdf') is not None:        
+        oai_url=urllib.parse.unquote(doi_query['best_oa_location.url_for_pdf'][0],  errors='replace')
+        status='oai url found'
+        print_verbose_level('unpaywall oai url:', oai_url)
+    
     if doi_query.get('best_oa_location.url') is not None:        
         oai_url=urllib.parse.unquote(doi_query['best_oa_location.url'][0],  errors='replace')
         status='oai url found'
-        print_verbose_level('unpaywall oai url:', oai_url)                          
-    else:
-        oai_url='oai url not found'
-        status='oai url not found'
+        print_verbose_level('unpaywall oai url:', oai_url)
+
+    if doi_query.get('best_oa_location.url_for_landing_page') is not None:        
+        oai_url=urllib.parse.unquote(doi_query['best_oa_location.url_for_landing_page'][0],  errors='replace')
+        status='oai url found'
+        print_verbose_level('unpaywall oai url:', oai_url)
+
     return oai_url, status
                                       
 def unpaywall_oais_from_crossref_dois(entries,store):
