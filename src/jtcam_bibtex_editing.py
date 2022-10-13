@@ -151,19 +151,21 @@ from habanero import Crossref
 from habanero import cn
 
 # set a mailto address to get into the "polite pool"
-Crossref(mailto = "jtcam@episciences.org")
+#Crossref(mailto = "jtcam@episciences.org")
 
 
 
 def crossref_query(bibliographic):
-    print_verbose_level('crossref query search on {:40.40}...'.format(bibliographic))
-    cr = Crossref()
+    print_verbose_level('crossref query search starts on {:40.40}...'.format(bibliographic))
+    cr = Crossref(mailto = "jtcam@episciences.org")
     try:
         x = cr.works(query_bibliographic = bibliographic, limit=1)
     except Exception as e:
         x={}
         x['status'] = 'bad'
-        print_verbose_level('crossref query search end with status', x['status'])
+        print_verbose_level('exception is :', e)
+        
+    print_verbose_level('crossref query search ends on {:40.40} with status'.format(bibliographic), x['status'])
     return x
 
 def crossref_get_doi_from_query_results(x):
@@ -216,7 +218,7 @@ def bibtex_entries_to_crossref_dois(store):
 import json
 def doi_to_crossref_bibtex_entry(doi):
 
-    cr = Crossref()
+    cr = Crossref(mailto = "jtcam@episciences.org")
     print_verbose_level('crossref cn bibtex  .... for ', doi)
     #x = cr.works(query_bibliographic = bibliographic, limit=3, cursor='*', progress_bar=True)
 
@@ -411,6 +413,9 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
     #print(opts.skip_double_check)
     #print(input_bibtex_entry.get('ID'))
     flag_skip = input_bibtex_entry.get('ID') in opts.skip_double_check
+
+    flag_forced_valid= input_bibtex_entry.get('ID') in opts.forced_valid_crossref_entry
+    
     check= ''
     flag=True
 
@@ -422,10 +427,10 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
     if input_bibtex_entry.get('ENTRYTYPE') != crossref_bibtex_entry.get('ENTRYTYPE')  :
         check += 'entry type: !ok '
         flag= flag and False
-        print_verbose_level('input_bibtex_entry type are different.', input_bibtex_entry.get('ENTRYTYPE'), crossref_bibtex_entry.get('ENTRYTYPE'))
-        if opts.stop_on_bad_check and not flag_skip:
-            print_verbose_level('press a key to continue')
-            input()
+        print_verbose_level('[Warning] input_bibtex_entry type are different.', input_bibtex_entry.get('ENTRYTYPE'), crossref_bibtex_entry.get('ENTRYTYPE'))
+        # if opts.stop_on_bad_check and not flag_skip:
+        #     print_verbose_level('press a key to continue')
+        #     input()
 
 
     # ------------------------------
@@ -437,10 +442,10 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
     if year_1_text !=  year_2_text and year_2_text != '':
         check += 'year: !ok '
         flag= flag and False
-        print_verbose_level('years are different.\n year in input bibtex :', year_1_text, '\n year crossref bibtex :', year_2_text)
-        if opts.stop_on_bad_check and not flag_skip:
-            print_verbose_level('press a key to continue')
-            input()
+        print_verbose_level('[Warning] years are different.\n year in input bibtex :', year_1_text, '\n year crossref bibtex :', year_2_text)
+        # if opts.stop_on_bad_check and not flag_skip:
+        #     print_verbose_level('press a key to continue')
+        #     input()
     elif year_2_text == '':
         check += 'year: none(2)'
     elif year_1_text == '':
@@ -469,17 +474,17 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
         check += 'title: ok- '
         flag = flag and True
         #print(common, intersection)
-        print_verbose_level('WARNING: small difference in title', intersection)
+        print_verbose_level('[Warning] small difference in title', intersection)
     else:
         check += 'title: !ok '
         flag = flag and False
         if opts.stop_on_bad_check and not flag_skip:
-            print_verbose_level('title in input bibtex:\n', document_1_text, '\n')
-            print_verbose_level('title in crossref bibtex:\n', document_2_text, '\n')
+            print_verbose_level('[Warning] title in input bibtex:\n', document_1_text, '\n')
+            print_verbose_level('[Warning] title in crossref bibtex:\n', document_2_text, '\n')
             print('difference: ', intersection, len(intersection))
-            print_verbose_level('error: large difference in title', intersection)
-            print_verbose_level('press a key to continue')
-            input()
+            # print_verbose_level('error: large difference in title', intersection)
+            # print_verbose_level('press a key to continue')
+            # input()
 
     # ------------------------------
     # -------- check other author ?
@@ -502,7 +507,7 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
         print(writer.write(db))
 
         print_verbose_level('hints: you may manually add crossref_doi ={foo} in the input entry of the bibtex file to fix the issue ')
-        if  opts.stop_on_bad_check and not flag_skip:
+        if  opts.stop_on_bad_check and not flag_skip and not flag_forced_valid:
             print_verbose_level('press a key to continue')
             input()
 
@@ -512,11 +517,11 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
     else:
         status = '!valid'
 
-    if input_bibtex_entry.get('ID') in opts.skip_double_check :
+    if  flag_skip:
         status = 'skipped'
 
 
-    if input_bibtex_entry.get('ID') in opts.forced_valid_crossref_entry:
+    if  flag_forced_valid:
         status = 'valid'
         check += 'forced valid'
 
@@ -782,8 +787,14 @@ with open(opts.filename) as bibtex_file:
 
 
 n_bibtex_entries = len(bib_database.entries)
-print_verbose_level('# number of  entries (input) ', n_bibtex_entries)
 
+# for entry in bib_database.entries:
+#     entry_id = entry.get('ID')
+#     print('entry_id', entry_id)
+
+    
+print_verbose_level('# number of  entries (input) ', n_bibtex_entries)
+# input()
 
 bib_database.entries = bib_database.entries[:opts.max_entry]
 
@@ -884,7 +895,7 @@ for key in store:
         store[key]['crossref_doi_status'] = 'failed'
 
 
-    print_verbose_level('validation results : ', store[key]['crossref_doi_status'])
+    print_verbose_level('validation results : ', store[key]['crossref_doi_status'], '\n')
 
     k=k+1
 
