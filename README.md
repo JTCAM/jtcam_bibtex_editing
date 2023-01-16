@@ -37,4 +37,4 @@ python jtcam_bibtex_editing.py test.bib
 6. We build the output bibtex entry with the `\\tag` using the key `unpaywall_doi` and `unpaywall_oai_url`. The key `unpaywall_oai_url` is set
 7. We try to merge at best info from crossref and unpaywall
    - `journal` is taken from crossref
-   - ,,,
+   - if you want to add by hand \tagOAI or \tagDOI, this can done by putting it in addendum.

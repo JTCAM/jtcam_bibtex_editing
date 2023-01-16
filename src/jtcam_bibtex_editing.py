@@ -51,7 +51,7 @@ class Options(object):
     def __init__(self):
         self.filename=None
         self.verbose=0
-        self.number_of_parallel_request = 20
+        self.number_of_parallel_request = 5
         self.output_unpaywall_data=False
         self.skip_double_check = []
         self.forced_valid_crossref_entry = []
@@ -354,7 +354,9 @@ def unpaywall_get_oai_url(doi_query):
     return oai_url, status
 
 def unpaywall_oais_from_crossref_dois(entries,store):
+    
 
+    
     t = Timer()
     t.start()
     results=Parallel(n_jobs=len(entries))(delayed(unpywall_doi)(store[entry.get('ID')]['crossref_doi']) for entry in entries)
@@ -535,10 +537,10 @@ def add_tag_doi_in_entry(doi, entry):
 
     entry['crossref_doi'] = doi
 
-    if entry.get('addendum'):
-        entry['addendum'].append('\\tagDOI{' + entry['crossref_doi'] + '}')
+    if entry.get('addendum_item'):
+        entry['addendum_item'].append('\\tagDOI{' + entry['crossref_doi'] + '}')
     else:
-        entry['addendum']= ['\\tagDOI{' + entry['crossref_doi'] + '}']
+        entry['addendum_item']= ['\\tagDOI{' + entry['crossref_doi'] + '}']
 
     return 'add doi'
 
@@ -572,17 +574,22 @@ def add_tag_oai_url_in_entry(store_key, entry):
         latex_tag='\\tagOAI{'
 
     if latex_tag is not None:
-        if entry.get('addendum'):
-            entry['addendum'].append(latex_tag +  oai_url+ '}')
+        if entry.get('addendum_item'):
+            entry['addendum_item'].append(latex_tag +  oai_url+ '}')
         else:
-            entry['addendum']= [latex_tag +  oai_url + '}']
+            entry['addendum_item']= [latex_tag +  oai_url + '}']
 
 
     return 'add oai'
 
 def complete_addendum_in_entry(entry):
+
     if  entry.get('addendum'):
-        entry['addendum'] = ', '.join(entry['addendum'])
+        print('keep input addendum as it is', addendum)
+        input()
+    elif  entry.get('addendum_item'):
+        entry['addendum'] =  ', '.join(entry['addendum_item'])
+        entry.pop('addendum_item')
 
 
 def astyle_author_crossref_bibtex(crossref_author):
@@ -688,7 +695,7 @@ def ad_hoc_build_output_bibtex_entries(store):
                     #output_bibtex_entry['journal']= crossref_bibtex_entry['journal']
                     store[key]['action'] [1] = add_tag_oai_url_in_entry(store[key], output_bibtex_entry)
 
-        complete_addendum_in_entry(output_bibtex_entry)
+                complete_addendum_in_entry(output_bibtex_entry)
 
 
         if output_bibtex_entry.get('month'):
