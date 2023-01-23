@@ -164,7 +164,7 @@ def crossref_query(bibliographic):
         x={}
         x['status'] = 'bad'
         print_verbose_level('exception is :', e)
-        
+
     print_verbose_level('crossref query search ends on {:40.40} with status'.format(bibliographic), x['status'])
     return x
 
@@ -354,9 +354,9 @@ def unpaywall_get_oai_url(doi_query):
     return oai_url, status
 
 def unpaywall_oais_from_crossref_dois(entries,store):
-    
 
-    
+
+
     t = Timer()
     t.start()
     results=Parallel(n_jobs=len(entries))(delayed(unpywall_doi)(store[entry.get('ID')]['crossref_doi']) for entry in entries)
@@ -417,7 +417,7 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
     flag_skip = input_bibtex_entry.get('ID') in opts.skip_double_check
 
     flag_forced_valid= input_bibtex_entry.get('ID') in opts.forced_valid_crossref_entry
-    
+
     check= ''
     flag=True
 
@@ -638,6 +638,9 @@ def ad_hoc_build_output_bibtex_entries(store):
     k=0
     for key in store:
 
+        if store[key].get('duplicate', False) :
+            continue
+
         input_bibtex_entry=store[key]['input']
 
         if  store[key].get('crossref_bibtex_status', '') != 'ok':
@@ -799,7 +802,7 @@ n_bibtex_entries = len(bib_database.entries)
 #     entry_id = entry.get('ID')
 #     print('entry_id', entry_id)
 
-    
+
 print_verbose_level('# number of  entries (input) ', n_bibtex_entries)
 # input()
 
@@ -827,6 +830,16 @@ if os.path.exists(pickle_name):
 else:
     store = {}
 
+# remove entry in store that is no longer in bib input file
+current_entries= [entry.get('ID') for entry in bib_database.entries]
+entry_to_pop = []
+for entry in store:
+    print(entry)
+    if entry not in current_entries:
+        print('entry in cache ', entry,' no longer in input bibtex file')
+        entry_to_pop.append(entry)
+for e in entry_to_pop:
+    store.pop(e)
 
 for entry in bib_database.entries:
     entry_id = entry.get('ID')
@@ -857,6 +870,8 @@ print_verbose_level(format_verbose_header.format('2. Crossref doi seach'))
 
 
 bibtex_entries_to_crossref_dois(store)
+
+
 
 with open(pickle_name, 'wb') as handle:
     pickle.dump(store, handle, protocol=pickle.HIGHEST_PROTOCOL)
@@ -906,6 +921,43 @@ for key in store:
 
     k=k+1
 
+#  - we remove duplicate of valid entries with the same DOI
+dois = []
+for key in store:
+    #print('key',store[key]['crossref_doi'])
+    print('check check',store[key].get('crossref_doi_status', ''))
+    if store[key].get('crossref_doi_status', '') == 'valid':
+        crossref_doi = store[key].get('crossref_doi', None)
+        if crossref_doi is not None:
+            dois.append([crossref_doi,key])
+
+#print(dois)
+
+seen = set()
+duplicates = []
+
+for x in dois:
+    if x[0] in seen:
+        duplicates.append(x)
+    else:
+        seen.add(x[0])
+#print(duplicates)
+
+for d in duplicates:
+    #print('entry', d[1], 'is duplicate. We do not treat it')
+    store[d[1]]['duplicate'] = True
+    #store.pop(d[1])
+
+n_duplicate_bibtex_entries = len(duplicates)
+
+#input()
+
+
+
+
+
+
+    
 
 # 5. We use the key  `crossref_doi` that are valid to make oai query on Unpaywall
 print_verbose_level(format_verbose_header.format('5. unpaywall oai from doi '))
@@ -920,6 +972,7 @@ with open(pickle_name, 'wb') as handle:
 
 print_verbose_level(format_verbose_header.format('6. build output bibtex entry '))
 ad_hoc_build_output_bibtex_entries(store)
+
 
 # summary
 e_idx=0
@@ -944,24 +997,37 @@ print_verbose_level(fmt_string.format('',
                                       'unpaywall msg'))
 for key in store:
 
-    print_verbose_level(fmt_string.format(e_idx,
-                                          str(store[key]['input'].get('ID')),
-                                          str(store[key].get('crossref_query_status')),
-                                          str(store[key]['crossref_doi_status']),
-                                          str(store[key].get('check')),
-                                          str(store[key].get('action',[' '])[0]),
-                                          str(store[key].get('unpaywall_status'))
-                                          )
-                        )
-    print_verbose_level(fmt_string.format('',
-                                          '',
-                                          '',
-                                          '',
-                                          '',
-                                          str(store[key].get('action', [' ', ' '])[1]),
-                                          str(store[key].get('unpaywall_msg'))
-                                          )
-                        )
+    if store[key].get('duplicate', False) :
+        print_verbose_level(fmt_string.format(e_idx,
+                                              str(store[key]['input'].get('ID')),
+                                              'duplicate',
+                                              '',
+                                              '',
+                                              '',
+                                              ''
+                                              )
+                            )
+
+
+    else:
+        print_verbose_level(fmt_string.format(e_idx,
+                                              str(store[key]['input'].get('ID')),
+                                              str(store[key].get('crossref_query_status')),
+                                              str(store[key]['crossref_doi_status']),
+                                              str(store[key].get('check')),
+                                              str(store[key].get('action',[' '])[0]),
+                                              str(store[key].get('unpaywall_status'))
+                                              )
+                            )
+        print_verbose_level(fmt_string.format('',
+                                              '',
+                                              '',
+                                              '',
+                                              '',
+                                              str(store[key].get('action', [' ', ' '])[1]),
+                                              str(store[key].get('unpaywall_msg'))
+                                              )
+                            )
 
     # keep_copy_editing = True
     # if keep_copy_editing :
@@ -989,13 +1055,17 @@ print_verbose_level(format_verbose_header.format('8. Write  output bibtex file '
 
 edited_bib_db=BibDatabase()
 for key in store:
+    if store[key].get('duplicate', False) :
+        continue
     edited_bib_db.entries.append(store[key]['output_bibtex_entry'])
 
 n_edited_bibtex_entries = len(edited_bib_db.entries)
+print_verbose_level('## number of  entries (input) ', n_bibtex_entries)
+print_verbose_level('## number of  duplicate entries (input) ', n_duplicate_bibtex_entries)
 print_verbose_level('## number of  entries (output) ', n_edited_bibtex_entries)
 
-if n_edited_bibtex_entries != n_bibtex_entries:
-    print_verbose_level('[WARNING]: The number of output entries is not same as the input', n_edited_bibtex_entries, '!=', n_bibtex_entries)
+if n_edited_bibtex_entries + n_duplicate_bibtex_entries != n_bibtex_entries :
+    print_verbose_level('[WARNING]: The number of output entries is not same as the input', n_edited_bibtex_entries, '!=', n_bibtex_entries + n_duplicate_bibtex_entries)
     print_verbose_level('######## \n\n')
 
 
