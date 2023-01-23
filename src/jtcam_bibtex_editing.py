@@ -856,28 +856,25 @@ for entry in bib_database.entries:
 
 
 
-# 2. Crossref doi search
-#   - we use it to do a query on crossref with the ['author', 'title', 'year', 'journal'] of the bibtex entry
-#	- we select the most relevant item
-#   -   We do no longer  use the key `doi` since we do not want it in the final key `doi`
-#	   if the author set the key `doi`, rename it as `crossref_doi`
-# we keep the doi and we store it in the key `crossref_doi` of `entry`
 
-
+# 2. Crossref doi search with the crossref API using habanero.
+#    the most relevent doi is stored in `crossref_doi`
+#    - we use it to do a query on crossref with the ['author', 'title', 'year', 'journal'] of the bibtex entry
+#    - we do not use the input key `doi` since we do not want it in the final key `doi`
+# 	   if the author set the key `doi`, rename it as `crossref_doi`
+#   - the doi can be set in the input file in `crossef_doi`. In that case, the Crossref doi search is not done
 print_verbose_level(format_verbose_header.format('2. Crossref doi seach'))
 
-
 bibtex_entries_to_crossref_dois(store)
-
-
 
 with open(pickle_name, 'wb') as handle:
     pickle.dump(store, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
 
-# 3. convert crossref_doi_bibtex_entry
-#   - we convert this item in bibtex format into  `crossref_bibtex_entry`
+# 3. bibtex entry query on Crossref using `crossref_doi` 
+#   - A bibtex entry is requested to Crossref from `crossref_doi`
+
 print_verbose_level(format_verbose_header.format('3. get bibtex from crossef '))
 
 
@@ -887,8 +884,9 @@ with open(pickle_name, 'wb') as handle:
     pickle.dump(store, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
 
-# 4. convert crossref_doi_bibtex_entry
-#   - we validate `crossref_bibtex_entry`  with input_entry
+# 4. Validation of the crossref bibtex entry
+#  - the validation is based on year title author ad entry type.
+#  - for valid ntries, we remove duplicate (entries with the same valid DOIs)
 print_verbose_level(format_verbose_header.format('4. validation of crossref_bibtex_entry '))
 
 k=0
@@ -956,7 +954,7 @@ n_duplicate_bibtex_entries = len(duplicates)
 
     
 
-# 5. We use the key  `crossref_doi` that are valid to make oai query on Unpaywall
+# 5. We use the validated  `crossref_doi`  to make oai query on Unpaywall
 print_verbose_level(format_verbose_header.format('5. unpaywall oai from doi '))
 unpaywall_oais_from_crossref_dois(valid_crossref_bib_db.entries, store)
 
@@ -1092,6 +1090,8 @@ line_prepender(output_file, cartrigde)
 
 import fileinput
 
+
+# 7. Some replacements are made to avoid curious Latex or html symbols in bibtex entries
 
 text_to_replace =[('$\mathsemicolon$', ';'),('{\&}amp;', '\&')]
 
