@@ -558,12 +558,17 @@ def add_tag_oai_url_in_entry(store_key, entry):
 
         fake_landing_page=  store_key['oai_url_for_landing_page']
         #print('fake_landing_page', fake_landing_page)
-        fake_landing_page_split = fake_landing_page.split('hal-')
-        #print('fake_landing_page_split', fake_landing_page_split)
+        fake_landing_page_split = fake_landing_page.split('/')
         if len(fake_landing_page_split) > 1  :
-            hal_number = fake_landing_page.split('hal-')[1].split('/')[0]
-            oai_url = 'hal-' + hal_number
-            print(oai_url)
+            #print(fake_landing_page_split)
+            for e in reversed(fake_landing_page_split):
+                if e[:4] == 'hal-':
+                    oai_url = e
+                    break
+            #hal_number = fake_landing_page.split('hal-')[1].split('/')[0]
+            #oai_url = 'hal-' + hal_number
+            #print(oai_url)
+            #input()
             latex_tag='\\tagHAL{'
         else:
             print('no hal number')
@@ -714,6 +719,10 @@ def ad_hoc_build_output_bibtex_entries(store):
                 output_bibtex_entry.pop('number')
 
 
+#        if output_bibtex_entry.get('isbn'):
+#            print('isbn', output_bibtex_entry.get('isbn'))
+
+                
         # writer = BibTexWriter()
         # db = BibDatabase()
         # db.entries.append(entry)
@@ -721,17 +730,6 @@ def ad_hoc_build_output_bibtex_entries(store):
         # db.entries.append(output_bibtex_entry)
         # print(writer.write(db))
 
-
-
-
-        # if output_bibtex_entry.get('month'):
-        #     output_bibtex_entry.pop('month')
-        # if output_bibtex_entry.get('pdf'):
-        #     output_bibtex_entry.pop('pdf')
-        # if output_bibtex_entry.get('url'):
-        #     output_bibtex_entry.pop('url')
-        # if output_bibtex_entry.get('doi'):
-        #     output_bibtex_entry.pop('doi')
         # intersection = set(entry.keys()).symmetric_difference( output_bibtex_entry.keys() )
         # if 'addendum' in intersection:
         #     intersection.remove('addendum')
@@ -925,7 +923,6 @@ for key in store:
 dois = []
 for key in store:
     #print('key',store[key]['crossref_doi'])
-    print('check check',store[key].get('crossref_doi_status', ''))
     if store[key].get('crossref_doi_status', '') == 'valid':
         crossref_doi = store[key].get('crossref_doi', None)
         if crossref_doi is not None:
