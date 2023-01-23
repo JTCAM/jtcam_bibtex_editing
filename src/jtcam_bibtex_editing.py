@@ -1024,11 +1024,12 @@ cartrigde = \
 line_prepender(output_file, cartrigde)
 
 import fileinput
-tempFile = open( output_file, 'r+' )
 
-text_to_replace =[('$\mathsemicolon$', ';')]
+
+text_to_replace =[('$\mathsemicolon$', ';'),('{\&}amp;', '\&')]
 
 for item in text_to_replace:
+    tempFile = open( output_file, 'r+' )
     for line in fileinput.input( output_file ):
         if item[0] in line :
             print('Match Found. replace ', item[0], ' by ', item[1])
