@@ -559,22 +559,24 @@ def add_tag_oai_url_in_entry(store_key, entry):
         fake_landing_page=  store_key['oai_url_for_landing_page']
         #print('fake_landing_page', fake_landing_page)
         fake_landing_page_split = fake_landing_page.split('/')
-        if len(fake_landing_page_split) > 1  :
-            #print(fake_landing_page_split)
-            for e in reversed(fake_landing_page_split):
-                if e[:4] == 'hal-':
-                    oai_url = e
-                    break
-            #hal_number = fake_landing_page.split('hal-')[1].split('/')[0]
-            #oai_url = 'hal-' + hal_number
-            #print(oai_url)
-            #input()
-            latex_tag='\\tagHAL{'
-        else:
-            print('no hal number')
-            latex_tag = '\\tagOAI{'
-            oai_url = fake_landing_page
-            print(oai_url)
+        # if len(fake_landing_page_split) > 1  :
+        #     #print(fake_landing_page_split)
+        #     for e in reversed(fake_landing_page_split):
+        #         if e[:4] == 'hal-':
+        #             oai_url = e
+        #             break
+        #     #hal_number = fake_landing_page.split('hal-')[1].split('/')[0]
+        #     #oai_url = 'hal-' + hal_number
+        #     #print(oai_url)
+        #     #input()
+        #     latex_tag='\\tagHAL{'
+        # else:
+        #     print('no hal number')
+        #     latex_tag = '\\tagOAI{'
+        #     oai_url = fake_landing_page
+        #     print(oai_url)
+        latex_tag='\\tagHAL{'
+        oai_url = store_key['oai_url_for_landing_page']
     else:
         latex_tag='\\tagOAI{'
 
