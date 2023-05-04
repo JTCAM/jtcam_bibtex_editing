@@ -555,28 +555,33 @@ def add_tag_oai_url_in_entry(store_key, entry):
         oai_url = store_key['oai_url_for_landing_page']
         print(oai_url)
     elif store_key.get('oai_type') == 'HAL':
-
+        #print(store_key)
         fake_landing_page=  store_key['oai_url_for_landing_page']
         #print('fake_landing_page', fake_landing_page)
-        fake_landing_page_split = fake_landing_page.split('/')
-        # if len(fake_landing_page_split) > 1  :
-        #     #print(fake_landing_page_split)
-        #     for e in reversed(fake_landing_page_split):
-        #         if e[:4] == 'hal-':
-        #             oai_url = e
-        #             break
-        #     #hal_number = fake_landing_page.split('hal-')[1].split('/')[0]
-        #     #oai_url = 'hal-' + hal_number
-        #     #print(oai_url)
-        #     #input()
-        #     latex_tag='\\tagHAL{'
-        # else:
-        #     print('no hal number')
-        #     latex_tag = '\\tagOAI{'
-        #     oai_url = fake_landing_page
-        #     print(oai_url)
-        latex_tag='\\tagHAL{'
-        oai_url = store_key['oai_url_for_landing_page']
+        fake_landing_page_split = fake_landing_page.split('/file/')
+        #print('fake_landing_page_split', fake_landing_page_split)
+        if len(fake_landing_page_split) > 1  :
+            #     #print(fake_landing_page_split)
+            #     for e in reversed(fake_landing_page_split):
+            #         if e[:4] == 'hal-':
+            #             oai_url = e
+            #             break
+            #     #hal_number = fake_landing_page.split('hal-')[1].split('/')[0]
+            #     #oai_url = 'hal-' + hal_number
+            #     #print(oai_url)
+            #     #input()
+            latex_tag='\\tagHAL{'
+            oai_url = fake_landing_page_split[0]
+        else:
+            # else:
+            #     print('no hal number')
+            #     latex_tag = '\\tagOAI{'
+            #     oai_url = fake_landing_page
+            #     print(oai_url)
+            latex_tag='\\tagHAL{'
+            oai_url = store_key['oai_url_for_landing_page']
+        print(oai_url)
+        #input()
     else:
         latex_tag='\\tagOAI{'
 
@@ -656,15 +661,24 @@ def ad_hoc_build_output_bibtex_entries(store):
 
 
         crossref_bibtex_entry=store[key]['crossref_bibtex_entry']
-        print_verbose_level('## input_bibtex_entry ', k ,': ', input_bibtex_entry.get('ID'))
+        print_verbose_level('## bibtex_entry ', k ,' ID : ', input_bibtex_entry.get('ID'))
 
 
         writer = BibTexWriter()
         db = BibDatabase()
         db.entries.append(input_bibtex_entry)
+        #db.entries.append(crossref_bibtex_entry)
+        print_verbose_level('Original input bibtex entry: \n' , writer.write(db))
+        #print('------')
+        writer = BibTexWriter()
+        db = BibDatabase()
+        #db.entries.append(input_bibtex_entry)
         db.entries.append(crossref_bibtex_entry)
-        print(writer.write(db))
+        print_verbose_level('crossref bibtex entry: \n' , writer.write(db))
+        #print('------')
 
+        
+        
         store[key]['action'] = ['','']
 
         # start from base_entry
@@ -725,12 +739,13 @@ def ad_hoc_build_output_bibtex_entries(store):
 #            print('isbn', output_bibtex_entry.get('isbn'))
 
                 
-        # writer = BibTexWriter()
-        # db = BibDatabase()
-        # db.entries.append(entry)
-        # db.entries.append(crossref_bibtex_entry)
-        # db.entries.append(output_bibtex_entry)
-        # print(writer.write(db))
+        writer = BibTexWriter()
+        db = BibDatabase()
+        #db.entries.append(entry)
+        #db.entries.append(crossref_bibtex_entry)
+        db.entries.append(output_bibtex_entry)
+        print_verbose_level('output edited bibtex entry: \n' , writer.write(db))
+        print('------')
 
         # intersection = set(entry.keys()).symmetric_difference( output_bibtex_entry.keys() )
         # if 'addendum' in intersection:
@@ -745,8 +760,8 @@ def ad_hoc_build_output_bibtex_entries(store):
         #     if entry.get(k):
         #         output_bibtex_entry[k] = entry.get(k)
 
-
-
+        #print_verbose_level('End')
+        #input()
         k= k+1
 
 
@@ -1093,18 +1108,22 @@ line_prepender(output_file, cartrigde)
 import fileinput
 
 
-# 7. Some replacements are made to avoid curious Latex or html symbols in bibtex entries
-
+# 9. Some replacements are made to avoid curious Latex or html symbols in bibtex entries
+print_verbose_level(format_verbose_header.format('9. Replacements of Latex or html symbols in bibtex entries '))
 text_to_replace =[('$\mathsemicolon$', ';'),('{\&}amp;', '\&')]
-
+#text_to_replace =[('$\mathsemicolon$', ';')]
+#text_to_replace =[('{\&}amp;', '\&')]
 for item in text_to_replace:
     tempFile = open( output_file, 'r+' )
     for line in fileinput.input( output_file ):
+ 
         if item[0] in line :
+            #print('line', line)
             print('Match Found. replace ', item[0], ' by ', item[1])
         #else:
         #    print('Match Not Found!!')
-        tempFile.write( line.replace( item[0], item[1] ) )
+            tempFile.write( line.replace( item[0], item[1] ) )
+            #print('replacement', line.replace( item[0], item[1] ))
     tempFile.close()
 
 
