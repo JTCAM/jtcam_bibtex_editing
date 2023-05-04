@@ -1110,25 +1110,32 @@ import fileinput
 
 # 9. Some replacements are made to avoid curious Latex or html symbols in bibtex entries
 print_verbose_level(format_verbose_header.format('9. Replacements of Latex or html symbols in bibtex entries '))
-text_to_replace =[('$\mathsemicolon$', ';'),('{\&}amp;', '\&')]
-#text_to_replace =[('$\mathsemicolon$', ';')]
-#text_to_replace =[('{\&}amp;', '\&')]
+text_to_replace =[('$\mathsemicolon$', ';'),
+                  ('{\&}amp;', '\&'),
+                  ('À', '{\`A}')]
+
 for item in text_to_replace:
-    tempFile = open( output_file, 'r+' )
-    for line in fileinput.input( output_file ):
- 
+    # read the current contents of the file
+    f = open(output_file, "r")
+    lines= f.readlines()
+    f.close()
+    
+    new_lines = []
+    for line in lines:
+        #print('line', line)
+        line_replacement= line
         if item[0] in line :
-            #print('line', line)
-            print('Match Found. replace ', item[0], ' by ', item[1])
-        #else:
-        #    print('Match Not Found!!')
-            tempFile.write( line.replace( item[0], item[1] ) )
-            #print('replacement', line.replace( item[0], item[1] ))
-    tempFile.close()
-
-
-
-#r = Unpywall.doi(dois=['10.1038/nature12373', '10.1093/nar/gkr1047'])
-
+#             #print('line', line)
+             print('Match Found. replace ', item[0], ' by ', item[1], '  in',  line)
+             line_replacement= line.replace( item[0], item[1] )
+        #print('line_replacement', line_replacement)
+        new_lines.append(line_replacement)
+    f = open(output_file, "w",  encoding="utf-8")
+    for line in new_lines:
+        f.write(line)
+    f.close()
+        
+    #print('new_lines', new_lines)
+        
 
 #print(r)
