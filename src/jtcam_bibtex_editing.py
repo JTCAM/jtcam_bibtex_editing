@@ -439,6 +439,13 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
     # -------- check year
     # ------------------------------
     year_1_text = input_bibtex_entry.get('year', '')
+    date = input_bibtex_entry.get('date', '')
+    if year_1_text  == '':
+        if date == '' :
+            print_verbose_level('[Warning] missing year and date in input file')
+        else:
+            year_1_text = date.split('-')[0]
+
     year_2_text = crossref_bibtex_entry.get('year', '')
 
     if year_1_text !=  year_2_text and year_2_text != '':
@@ -677,8 +684,8 @@ def ad_hoc_build_output_bibtex_entries(store):
         print_verbose_level('crossref bibtex entry: \n' , writer.write(db))
         #print('------')
 
-        
-        
+
+
         store[key]['action'] = ['','']
 
         # start from base_entry
@@ -696,11 +703,9 @@ def ad_hoc_build_output_bibtex_entries(store):
                             'publisher', 'volume', 'number', 'booktitle', 'pages']
 
                 for i in range(len(opts.keep_entry)):
-                    if opts.keep_entry[i] == entry['ID'] :
+                    if opts.keep_entry[i] == input_bibtex_entry['ID'] :
                         if opts.keep_entry[i+1] in use_entry:
                             use_entry.remove(opts.keep_entry[i+1])
-
-                #print(use_entry)
 
                 for bkey in use_entry:
                     if crossref_bibtex_entry.get(bkey):
@@ -738,7 +743,7 @@ def ad_hoc_build_output_bibtex_entries(store):
 #        if output_bibtex_entry.get('isbn'):
 #            print('isbn', output_bibtex_entry.get('isbn'))
 
-                
+
         writer = BibTexWriter()
         db = BibDatabase()
         #db.entries.append(entry)
@@ -889,7 +894,7 @@ with open(pickle_name, 'wb') as handle:
 
 
 
-# 3. bibtex entry query on Crossref using `crossref_doi` 
+# 3. bibtex entry query on Crossref using `crossref_doi`
 #   - A bibtex entry is requested to Crossref from `crossref_doi`
 
 print_verbose_level(format_verbose_header.format('3. get bibtex from crossef '))
@@ -969,7 +974,7 @@ n_duplicate_bibtex_entries = len(duplicates)
 
 
 
-    
+
 
 # 5. We use the validated  `crossref_doi`  to make oai query on Unpaywall
 print_verbose_level(format_verbose_header.format('5. unpaywall oai from doi '))
@@ -1119,7 +1124,7 @@ for item in text_to_replace:
     f = open(output_file, "r")
     lines= f.readlines()
     f.close()
-    
+
     new_lines = []
     for line in lines:
         #print('line', line)
@@ -1134,8 +1139,8 @@ for item in text_to_replace:
     for line in new_lines:
         f.write(line)
     f.close()
-        
+
     #print('new_lines', new_lines)
-        
+
 
 #print(r)
