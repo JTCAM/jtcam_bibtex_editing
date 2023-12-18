@@ -237,6 +237,7 @@ def doi_to_crossref_bibtex_entry(doi):
         bibtex_entry_str=cn.content_negotiation(ids = doi, format = "bibentry")
         json_entry=cn.content_negotiation(ids = doi, format = "citeproc-json")
         #print(json_entry)
+        #print('\n\n\n bibtex_entry_str : ', bibtex_entry_str)
         #d = json.loads(json_entry)
         #print(d['author'])
         #print(d.keys())
@@ -273,10 +274,18 @@ def dois_to_crossref_bibtex_entries(store):
             #print(bibtex_entry_str)
             bp = BibTexParser(interpolate_strings=False)
             bib_database = bp.parse(bibtex_entry_str)
+            entry_nb =0 
             for e in bib_database.entries: # to be improved
-                store[key]['crossref_bibtex_entry']  = e
-                break
+                entry_nb = entry_nb +1
+            if (entry_nb ==0) :
+                store[key]['crossref_bibtex_status'] = '!ok'
+                print_verbose_level('WARNING:    bad format for bibtex from crossref', store[key]['input']['ID'])
+            else:
+                for e in bib_database.entries: # to be improved
+                    store[key]['crossref_bibtex_entry']  = e
+                    break
         cnt =cnt+1
+        input()
 
 
 # ----------------------
