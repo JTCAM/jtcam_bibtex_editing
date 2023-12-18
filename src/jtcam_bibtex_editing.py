@@ -20,6 +20,7 @@
 import getopt
 import sys, os
 
+import pprint
 
 import time
 
@@ -61,6 +62,8 @@ class Options(object):
         self.crossref_search_key =  ['author',  'year', 'title']
         self.use_input_crossref_doi =True
         self.keep_entry = []
+        self.split_output = False
+
     ## Print usage information
     def usage(self, long=False):
         #print(self.__doc__); print()
@@ -91,6 +94,9 @@ class Options(object):
             ex: [('toto1', 'author'), ('toto2', 'journal')]
        keep the key in entry of the input file. This can be used if the bibtex entry returned
             by crossref is bad.
+     --split-output
+       split output in multiple bib files to test entries one by one
+
 
      """)
 
@@ -100,7 +106,7 @@ class Options(object):
             opts, args = getopt.gnu_getopt(sys.argv[1:], '',
                                            ['help', 'verbose=', 'is-oa',
                                             'output-unpaywall-data','skip-double-check=','forced-valid-crossref-entry=',
-                                            'stop-on-bad-check', 'max-entry=', 'keep-entry='])
+                                            'stop-on-bad-check', 'max-entry=', 'keep-entry=', 'split-output'])
             self.configure(opts, args)
 
         except getopt.GetoptError as err:
@@ -132,6 +138,8 @@ class Options(object):
                 #     self.keep_entry[input_list[2*l]] = input_list[2*l+1]
                 # print(self.keep_entry)
                 self.keep_entry = a.split(',')
+            elif o == '--split-output':
+                self.split_output = True
         if len(args) > 0:
             self.filename = args[0]
         else:
@@ -920,7 +928,7 @@ for key in store:
 
     if store[key].get('crossref_bibtex_status', '') == 'ok':
         # keep the entry ID of the input to keep track
-
+        # pprint.pprint(store[key])
         store[key]['crossref_bibtex_entry_key'] = store[key]['crossref_bibtex_entry']['ID']
         store[key]['crossref_bibtex_entry']['ID'] = store[key]['input']['ID']
 
@@ -1097,6 +1105,40 @@ with open(output_file, 'w') as bibfile:
 
 
 
+if opts.split_output:
+    print_verbose_level(format_verbose_header.format('10. Splitted bib entries'))
+    list_bib_file = []
+    for entry in edited_bib_db.entries:
+        #print('\n\n\n entry in bib ', entry)
+        #print(entry)
+
+        # create a tmp bibtex file
+        writer = BibTexWriter()
+        edited_bib=BibDatabase()
+        edited_bib.entries.append(entry)
+        dir_name= 'splitted_bibtex_entries'
+        if not os.path.exists(dir_name):
+            os.mkdir(dir_name)
+
+        output_file= os.path.join(dir_name,entry['ID'] +'.bib')
+
+        str_file = r"\ "[0]
+        str_file = str_file  +'addbibresource{' + output_file + '}'
+
+        list_bib_file.append(str_file)
+
+        with open(output_file, 'w') as bibfile:
+            bibtex_str = dumps(edited_bib, writer)
+            bibfile.write(bibtex_str)
+
+    with open('splitted_bib_entries.tex', 'w') as f:
+        for line in list_bib_file:
+            f.write(f"{line}\n")
+
+    print_verbose_level('splitted bib entries are in the folder : splitted_bibtex_entries ')
+    print_verbose_level('\\input(splitted_bib_entries.tex) to use it')
+
+
 def line_prepender(filename, line):
     with open(filename, 'r+') as f:
         content = f.read()
@@ -1117,7 +1159,8 @@ import fileinput
 print_verbose_level(format_verbose_header.format('9. Replacements of Latex or html symbols in bibtex entries '))
 text_to_replace =[('$\mathsemicolon$', ';'),
                   ('{\&}amp;', '\&'),
-                  ('À', '{\`A}')]
+                  ('À', '{\`A}'),
+                  ('\i', 'i')]
 
 for item in text_to_replace:
     # read the current contents of the file
