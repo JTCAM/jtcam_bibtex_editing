@@ -285,7 +285,7 @@ def dois_to_crossref_bibtex_entries(store):
                     store[key]['crossref_bibtex_entry']  = e
                     break
         cnt =cnt+1
-        input()
+        #input()
 
 
 # ----------------------
@@ -1114,6 +1114,62 @@ with open(output_file, 'w') as bibfile:
 
 
 
+# 9. Some replacements are made to avoid curious Latex or html symbols in bibtex entries
+print_verbose_level(format_verbose_header.format('9. Replacements of Latex or html symbols in bibtex entries '))
+
+
+def replace_curious_character(output_file):
+    text_to_replace =[('$\mathsemicolon$', ';'),
+                      ('{\&}amp;', '\&'),
+                      ('&amp;', '\&'),
+                      ('À', '{\`A}'),
+                      ('\i', 'i')]
+
+    for item in text_to_replace:
+        # read the current contents of the file
+        f = open(output_file, "r")
+        lines= f.readlines()
+        f.close()
+
+        new_lines = []
+        for line in lines:
+            #print('line', line)
+            line_replacement= line
+            if item[0] in line :
+    #             #print('line', line)
+                 print('Match Found. replace ', item[0], ' by ', item[1], '  in',  line)
+                 line_replacement= line.replace( item[0], item[1] )
+            #print('line_replacement', line_replacement)
+            new_lines.append(line_replacement)
+        f = open(output_file, "w",  encoding="utf-8")
+        for line in new_lines:
+            f.write(line)
+        f.close()
+
+        #print('new_lines', new_lines)
+
+replace_curious_character(output_file)
+
+
+
+def line_prepender(filename, line):
+    with open(filename, 'r+') as f:
+        content = f.read()
+        f.seek(0, 0)
+        f.write(line.rstrip('\r\n') + '\n' + content)
+
+
+cartrigde = \
+"@Comment{This file has been generated with the script jtcam_bibtex_editing.py}\n" + \
+"@Comment{Do not edit it directly by yourself. Modify  the source file if needed}"
+
+line_prepender(output_file, cartrigde)
+
+import fileinput
+
+
+
+
 if opts.split_output:
     print_verbose_level(format_verbose_header.format('10. Splitted bib entries'))
     list_bib_file = []
@@ -1139,6 +1195,7 @@ if opts.split_output:
         with open(output_file, 'w') as bibfile:
             bibtex_str = dumps(edited_bib, writer)
             bibfile.write(bibtex_str)
+        replace_curious_character(output_file)
 
     with open('splitted_bib_entries.tex', 'w') as f:
         for line in list_bib_file:
@@ -1148,51 +1205,6 @@ if opts.split_output:
     print_verbose_level('\\input(splitted_bib_entries.tex) to use it')
 
 
-def line_prepender(filename, line):
-    with open(filename, 'r+') as f:
-        content = f.read()
-        f.seek(0, 0)
-        f.write(line.rstrip('\r\n') + '\n' + content)
-
-
-cartrigde = \
-"@Comment{This file has been generated with the script jtcam_bibtex_editing.py}\n" + \
-"@Comment{Do not edit it directly by yourself. Modify  the source file if needed}"
-
-line_prepender(output_file, cartrigde)
-
-import fileinput
-
-
-# 9. Some replacements are made to avoid curious Latex or html symbols in bibtex entries
-print_verbose_level(format_verbose_header.format('9. Replacements of Latex or html symbols in bibtex entries '))
-text_to_replace =[('$\mathsemicolon$', ';'),
-                  ('{\&}amp;', '\&'),
-                  ('À', '{\`A}'),
-                  ('\i', 'i')]
-
-for item in text_to_replace:
-    # read the current contents of the file
-    f = open(output_file, "r")
-    lines= f.readlines()
-    f.close()
-
-    new_lines = []
-    for line in lines:
-        #print('line', line)
-        line_replacement= line
-        if item[0] in line :
-#             #print('line', line)
-             print('Match Found. replace ', item[0], ' by ', item[1], '  in',  line)
-             line_replacement= line.replace( item[0], item[1] )
-        #print('line_replacement', line_replacement)
-        new_lines.append(line_replacement)
-    f = open(output_file, "w",  encoding="utf-8")
-    for line in new_lines:
-        f.write(line)
-    f.close()
-
-    #print('new_lines', new_lines)
 
 
 #print(r)
