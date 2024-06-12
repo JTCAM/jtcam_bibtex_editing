@@ -645,21 +645,18 @@ def astyle_author_crossref_bibtex(crossref_author):
 def astyle_author_crossref_json(json_entry):
     d = json.loads(json_entry)
     author=d['author']
-    #print(author)
     author_bibtex =[]
-
-
     for a in author:
+        if a.get('family', None) :
+            family = a['family']
+            if family.isupper():
+                family = family.title()
 
-        family = a['family']
-        if family.isupper():
-            family = family.title()
-
-        if a.get('given', None) :
-            given = a['given']
-            author_bibtex.append(family+ ', ' +given)
-        else:
-            author_bibtex.append(family)
+            if a.get('given', None) :
+                given = a['given']
+                author_bibtex.append(family+ ', ' +given)
+            else:
+                author_bibtex.append(family)
 
     author_bibtex = ' and ' .join(author_bibtex)
     #print('author_bibtex', author_bibtex)
@@ -1123,7 +1120,9 @@ def replace_curious_character(output_file):
                       ('{\&}amp;', '\&'),
                       ('&amp;', '\&'),
                       ('À', '{\`A}'),
-                      ('\i', 'i')]
+                      ('\i', 'i'),
+                      ('–', '-'),
+                      ]
 
     for item in text_to_replace:
         # read the current contents of the file
