@@ -796,7 +796,7 @@ verbose_level = 1
 
 def print_verbose_level(*args, **kwargs):
     if verbose_level:
-        print('[jtcam unpaywall]', *args, **kwargs)
+        print('[jtcam_bibtex_editing]', *args, **kwargs)
 
 base_filename =  os.path.splitext(opts.filename)[0]
 if os.path.exists(opts.filename):
@@ -826,7 +826,7 @@ with open(opts.filename) as bibtex_file:
 
     bibtex_str = bibtex_file.read()
     #we use the option interpolate_strings=False foo string that are not defined
-    bp = BibTexParser(interpolate_strings=False)
+    bp = BibTexParser(interpolate_strings=False,ignore_nonstandard_types=False)
     bib_database = bp.parse(bibtex_str)
 
 
@@ -838,7 +838,6 @@ n_bibtex_entries = len(bib_database.entries)
 
 
 print_verbose_level('# number of  entries (input) ', n_bibtex_entries)
-# input()
 
 bib_database.entries = bib_database.entries[:opts.max_entry]
 
