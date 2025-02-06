@@ -619,11 +619,13 @@ def add_tag_oai_url_in_entry(store_key, entry):
     return 'add oai'
 
 def complete_addendum_in_entry(entry):
-
     if  entry.get('addendum'):
-        print('keep input addendum as it is', addendum)
+        addendum = entry['addendum']
+        if  entry.get('addendum_item'):
+            entry['addendum_item'].append(addendum)
+            print('addendum[item]', entry.get('addendum_item'))
         input()
-    elif  entry.get('addendum_item'):
+    if  entry.get('addendum_item'):
         entry['addendum'] =  ', '.join(entry['addendum_item'])
         entry.pop('addendum_item')
 
