@@ -178,7 +178,12 @@ def crossref_query(bibliographic):
 
 def crossref_get_doi_from_query_results(x):
     # we return the first DOI in x
-    return x['message']['items'][0]['DOI']
+    try :
+        doi = x['message']['items'][0]['DOI']
+    except Exception as e:
+        print('result from crossref has no DOI!!', e)
+        doi = None
+    return doi
 
 
 def bibtex_entries_to_crossref_dois(store):
@@ -213,15 +218,17 @@ def bibtex_entries_to_crossref_dois(store):
         results=Parallel(n_jobs=n_jobs)( delayed(crossref_query)(bibliographic[entry_id][1]) for entry_id in bibliographic)
     t.stop()
 
-    cnt =0
-    for entry_id in bibliographic:
+    for cnt, entry_id in enumerate(bibliographic):
         entry = bibliographic[entry_id][0]
         entry_id=entry.get('ID')
-        store[entry_id]['crossref_query_status'] = results[cnt]['status']
         if results[cnt]['status'] == 'ok':
-            store[entry_id]['crossref_doi'] = crossref_get_doi_from_query_results(results[cnt])
+            doi = crossref_get_doi_from_query_results(results[cnt])
+            if doi is not None:
+                store[entry_id]['crossref_doi'] = doi
+                store[entry_id]['crossref_query_status'] = results[cnt]['status']
+            else:
+                store[entry_id]['crossref_query_status'] = 'bad'
 
-        cnt=cnt+1
 
 import json
 def doi_to_crossref_bibtex_entry(doi):
@@ -253,11 +260,15 @@ def dois_to_crossref_bibtex_entries(store):
     store_search ={}
     # list of search
     for key in store:
+        #print(store[key])
         #print(store[key]['crossref_query_status'])
-        if store[key].get('crossref_bibtex_status', '') != 'ok':
-             store_search[key] =store[key]
+        if store[key].get('crossref_query_status', '') == 'ok':
+            if store[key].get('crossref_bibtex_status', '') != 'ok':
+                store_search[key] =store[key]
+            else:
+                print_verbose_level('   use cache for ', store[key]['input']['ID'])
         else:
-            print_verbose_level('   use cache for ', store[key]['input']['ID'])
+            print_verbose_level('crossref query for ', store[key]['input']['ID'], ' has failed')
 
     t = Timer()
     t.start()
@@ -265,8 +276,8 @@ def dois_to_crossref_bibtex_entries(store):
         n_jobs= min(len(store_search),opts.number_of_parallel_request)
         results=Parallel(n_jobs=n_jobs)( delayed(doi_to_crossref_bibtex_entry)(store[key]['crossref_doi']) for key in store_search)
     t.stop()
-    cnt = 0
-    for key in store_search:
+
+    for cnt, key in enumerate(store_search):
         bibtex_entry_str,json_entry, status  = results[cnt]
         store[key]['crossref_bibtex_status'] = status
         if status == 'ok':
@@ -274,7 +285,7 @@ def dois_to_crossref_bibtex_entries(store):
             #print(bibtex_entry_str)
             bp = BibTexParser(interpolate_strings=False)
             bib_database = bp.parse(bibtex_entry_str)
-            entry_nb =0 
+            entry_nb =0
             for e in bib_database.entries: # to be improved
                 entry_nb = entry_nb +1
             if (entry_nb ==0) :
@@ -284,8 +295,7 @@ def dois_to_crossref_bibtex_entries(store):
                 for e in bib_database.entries: # to be improved
                     store[key]['crossref_bibtex_entry']  = e
                     break
-        cnt =cnt+1
-        #input()
+   
 
 
 # ----------------------
