@@ -1,74 +1,80 @@
-# /*
-# * This simple python script uses the API of crossref and unpaywall to reformat author's bibtex file, addind verified doi and oai on open access ressources.
-# * Copyright (C) 2022 Vincent Acary
-# *
-# * This program is free software: you can redistribute it and/or modify
-# * it under the terms of the GNU General Public License as published by
-# * the Free Software Foundation, either version 3 of the License, or
-# * (at your option) any later version.
-# *
-# * This program is distributed in the hope that it will be useful,
-# * but WITHOUT ANY WARRANTY; without even the implied warranty of
-# * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# * GNU General Public License for more details.
-# *
-# * You should have received a copy of the GNU General Public License
-# * along with this program.  If not, see <http://www.gnu.org/licenses/>.
-# */
+#!/usr/bin/env python3
+"""
+JTCAM BibTeX Editing Tool
 
+This script uses the Crossref and Unpaywall APIs to reformat author BibTeX files,
+adding verified DOIs and OAI URLs for open access resources.
+
+Copyright (C) 2022 Vincent Acary
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+"""
 
 import getopt
-import sys, os
-
+import sys
+import os
 import pprint
-
 import time
 
+
 class TimerError(Exception):
-    """A custom exception used to report errors in use of Timer class"""
+    """Custom exception for Timer class errors."""
+    pass
+
 
 class Timer:
+    """Simple timer class for measuring execution time."""
+    
     def __init__(self):
         self._start_time = None
 
     def start(self):
-        """Start a new timer"""
+        """Start the timer."""
         if self._start_time is not None:
-            raise TimerError(f"Timer is running. Use .stop() to stop it")
-
+            raise TimerError("Timer is running. Use .stop() to stop it")
         self._start_time = time.perf_counter()
 
     def stop(self):
-        """Stop the timer, and report the elapsed time"""
+        """Stop the timer and print elapsed time."""
         if self._start_time is None:
-            raise TimerError(f"Timer is not running. Use .start() tos start it")
-
+            raise TimerError("Timer is not running. Use .start() to start it")
         elapsed_time = time.perf_counter() - self._start_time
         self._start_time = None
         print(f"Elapsed time: {elapsed_time:0.4f} seconds")
 
 
-class Options(object):
+class Options:
+    """Command-line options handler."""
+    
     def __init__(self):
-        self.filename=None
-        self.verbose=0
-        self.number_of_parallel_request = 5
-        self.output_unpaywall_data=False
+        self.filename = None
+        self.verbose = 0
+        self.number_of_parallel_request = 2
+        self.output_unpaywall_data = False
         self.skip_double_check = []
         self.forced_valid_crossref_entry = []
         self.stop_on_bad_check = False
         self.max_entry = 100000
-        self.crossref_search_key =  ['author',  'year', 'title', 'journal']
-        self.crossref_search_key =  ['author',  'year', 'title']
-        self.use_input_crossref_doi =True
+        self.crossref_search_key = ['author', 'year', 'title']
+        self.use_input_doi = True
         self.keep_entry = []
         self.split_output = False
 
-    ## Print usage information
     def usage(self, long=False):
-        #print(self.__doc__); print()
-        print('Usage: {0} [OPTION]... <bib file>'
-              .format(os.path.split(sys.argv[0])[1]))
+        """Print usage information."""
+        print('Usage: {0} [OPTION]... <bib file>'.format(
+            os.path.split(sys.argv[0])[1]))
         print()
         if not long:
             print("""[--help][--verbose][--output-unpaywall-data][--skip-double-check=][--stop-on-bad-check][--max-entry=][--keep-entry=][--forced-valid-crossref-entry=]
@@ -78,7 +84,7 @@ class Options(object):
      --help
        display this message
      --verbose=
-       set verbose
+       set verbose level
      --output-unpaywall-data
        output the whole unpaywall data in the output bibtex file. Useful for checking query.
      --skip-double-check=<entry_id>,<entry_id>,...
@@ -97,46 +103,43 @@ class Options(object):
      --split-output
        split output in multiple bib files to test entries one by one
 
-
      """)
 
     def parse(self):
-        ## Parse command line
+        """Parse command line arguments."""
         try:
-            opts, args = getopt.gnu_getopt(sys.argv[1:], '',
-                                           ['help', 'verbose=', 'is-oa',
-                                            'output-unpaywall-data','skip-double-check=','forced-valid-crossref-entry=',
-                                            'stop-on-bad-check', 'max-entry=', 'keep-entry=', 'split-output'])
+            opts, args = getopt.gnu_getopt(
+                sys.argv[1:], '',
+                ['help', 'verbose=', 'is-oa',
+                 'output-unpaywall-data', 'skip-double-check=',
+                 'forced-valid-crossref-entry=',
+                 'stop-on-bad-check', 'max-entry=', 'keep-entry=',
+                 'split-output'])
             self.configure(opts, args)
-
         except getopt.GetoptError as err:
             sys.stderr.write('{0}\n'.format(str(err)))
             self.usage()
             exit(2)
 
     def configure(self, opts, args):
+        """Configure options from parsed arguments."""
         for o, a in opts:
             if o == '--help':
                 self.usage(long=True)
                 exit(0)
             elif o == '--verbose':
-                self.verbose=int(a)
+                self.verbose = int(a)
             elif o == '--output-unpaywall-data':
-                self.output_unpaywall_data=True
+                self.output_unpaywall_data = True
             elif o == '--skip-double-check':
-                self.skip_double_check =  a.split(',')
+                self.skip_double_check = a.split(',')
             elif o == '--forced-valid-crossref-entry':
-                self.forced_valid_crossref_entry =  a.split(',')
+                self.forced_valid_crossref_entry = a.split(',')
             elif o == '--stop-on-bad-check':
                 self.stop_on_bad_check = True
             elif o == '--max-entry':
-                self.max_entry=int(a)
+                self.max_entry = int(a)
             elif o == '--keep-entry':
-                # input_list = a.split(',')
-                # self.keep_entry = {}
-                # for l in range(len(input_list)//2):
-                #     self.keep_entry[input_list[2*l]] = input_list[2*l+1]
-                # print(self.keep_entry)
                 self.keep_entry = a.split(',')
             elif o == '--split-output':
                 self.split_output = True
@@ -146,39 +149,65 @@ class Options(object):
             self.usage()
             exit(1)
 
-# -------------------
-# for paralell job
-# -------------------
+
+# =============================================================================
+# Parallel processing
+# =============================================================================
 from joblib import Parallel, delayed
 
 
-# ----------------------
-# crossref function
-# ----------------------
+# =============================================================================
+# Crossref API functions
+# =============================================================================
 from habanero import Crossref
 from habanero import cn
 
-# set a mailto address to get into the "polite pool"
-#Crossref(mailto = "jtcam@episciences.org")
-
+# Set a mailto address to get into the "polite pool" (higher rate limits)
+Crossref(mailto="jtcam@episciences.org")
 
 
 def crossref_query(bibliographic):
-    print_verbose_level('crossref query search starts on {:40.40}...'.format(bibliographic))
-    cr = Crossref(mailto = "jtcam@episciences.org")
+    """
+    Query Crossref API for a bibliographic entry.
+    
+    Args:
+        bibliographic: Search query string (author, title, year, etc.)
+        
+    Returns:
+        dict: Crossref API response
+    """
+    print_verbose_level(
+        'crossref query search starts on {:40.40}...'.format(bibliographic))
+    cr = Crossref(
+        base_url="https://api.crossref.org",
+        mailto="jtcam@episciences.org",
+        timeout= 30
+    )
+
     try:
-        x = cr.works(query_bibliographic = bibliographic, limit=1)
+        x = cr.works(query_bibliographic=bibliographic, limit=1)
     except Exception as e:
-        x={}
+        x = {}
         x['status'] = 'bad'
         print_verbose_level('exception is :', e)
 
-    print_verbose_level('crossref query search ends on {:40.40} with status'.format(bibliographic), x['status'])
+    print_verbose_level(
+        'crossref query search ends on {:40.40} with status'.format(
+            bibliographic), x['status'])
     return x
 
+
 def crossref_get_doi_from_query_results(x):
-    # we return the first DOI in x
-    try :
+    """
+    Extract DOI from Crossref query results.
+    
+    Args:
+        x: Crossref API response
+        
+    Returns:
+        str: DOI string or None if not found
+    """
+    try:
         doi = x['message']['items'][0]['DOI']
     except Exception as e:
         print('result from crossref has no DOI!!', e)
@@ -187,40 +216,46 @@ def crossref_get_doi_from_query_results(x):
 
 
 def bibtex_entries_to_crossref_dois(store):
+    """
+    Search for DOIs for all BibTeX entries using Crossref.
+    
+    Args:
+        store: Dictionary containing entry data
+    """
     print_verbose_level('Crossref doi search from bibtex input entry')
-    # parrallel
-    bibliographic ={}
+    bibliographic = {}
     for key in store:
         entry = store[key]['input']
-        entry_id=entry.get('ID')
-        if opts.use_input_crossref_doi and entry.get('crossref_doi'):
-            # we skip the search
-            print_verbose_level('    use input crossref_doi for ', entry_id)
+        entry_id = entry.get('ID')
+        if opts.use_input_doi and entry.get('doi'):
+            # Use existing doi from input, skip search
+            print_verbose_level('    use user input doi for ', entry_id)
             store[key]['crossref_query_status'] = 'ok'
-            store[key]['crossref_doi'] = entry.get('crossref_doi')
+            store[key]['crossref_doi'] = entry.get('doi')
             continue
         else:
             if store[key].get('crossref_query_status', '') != 'ok':
-                bibliographic[entry_id] =[entry]
-                bibliographic[entry_id]
+                bibliographic[entry_id] = [entry]
                 query_text = []
-                for key in  opts.crossref_search_key :
-                    query_text.append(entry.get(key,''))
+                for key in opts.crossref_search_key:
+                    query_text.append(entry.get(key, ''))
                 query_text = ' '.join(query_text)
-                #print('query_text', query_text)
                 bibliographic[entry_id].append(query_text)
             else:
                 print_verbose_level('    use cache entry for ', entry_id)
+    
     t = Timer()
     t.start()
-    if len(bibliographic) >0 :
-        n_jobs= min(len(bibliographic),opts.number_of_parallel_request)
-        results=Parallel(n_jobs=n_jobs)( delayed(crossref_query)(bibliographic[entry_id][1]) for entry_id in bibliographic)
+    if len(bibliographic) > 0:
+        n_jobs = min(len(bibliographic), opts.number_of_parallel_request)
+        results = Parallel(n_jobs=n_jobs)(
+            delayed(crossref_query)(bibliographic[entry_id][1])
+            for entry_id in bibliographic)
     t.stop()
 
     for cnt, entry_id in enumerate(bibliographic):
         entry = bibliographic[entry_id][0]
-        entry_id=entry.get('ID')
+        entry_id = entry.get('ID')
         if results[cnt]['status'] == 'ok':
             doi = crossref_get_doi_from_query_results(results[cnt])
             if doi is not None:
@@ -231,101 +266,145 @@ def bibtex_entries_to_crossref_dois(store):
 
 
 import json
+
+doi_to_bibtex_entry_server = 'crossref'
+doi_to_bibtex_entry_server = 'doi.org'
+
+
 def doi_to_crossref_bibtex_entry(doi):
-
-    cr = Crossref(mailto = "jtcam@episciences.org")
+    """
+    Get BibTeX entry from DOI using Crossref content negotiation.
+    
+    Args:
+        doi: DOI string
+        
+    Returns:
+        tuple: (bibtex_entry_str, json_entry, status)
+    """
+    cr = Crossref(mailto="jtcam@episciences.org")
     print_verbose_level('crossref cn bibtex  .... for ', doi)
-    #x = cr.works(query_bibliographic = bibliographic, limit=3, cursor='*', progress_bar=True)
 
-    # x = cr.works(ids = doi)
-    # print_verbose_level('crossref query search end with status', x['status'])
-    # print(x)
     try:
-        bibtex_entry_str=cn.content_negotiation(ids = doi, format = "bibentry")
-        json_entry=cn.content_negotiation(ids = doi, format = "citeproc-json")
-        #print(json_entry)
-        #print('\n\n\n bibtex_entry_str : ', bibtex_entry_str)
-        #d = json.loads(json_entry)
-        #print(d['author'])
-        #print(d.keys())
-        #input()
+        bibtex_entry_str = cn.content_negotiation(ids=doi, format="bibentry")
+        json_entry = cn.content_negotiation(ids=doi, format="citeproc-json")
+    except Exception as e:
+        print('cn.content_negotiation exception', e)
+        return None, None, '!ok'
+    print('ok')
+    
+    return bibtex_entry_str, json_entry, 'ok'
+
+
+import requests
+def doi_to_doi_org_bibtex_entry(doi):
+    print_verbose_level('doi.org query for  bibtex entry  .... for ', doi)
+    url = f"https://doi.org/{doi}"
+
+    headers = {"Accept": "application/x-bibtex"}
+    try:
+        r = requests.get(url, headers=headers, timeout=20)
+        bibtex_entry_str = r.text
+        #print(r.text)
+        
     except Exception as e:
         print('cn.content_negotiation exception', e)
         return None, None, '!ok'
 
-    return bibtex_entry_str,json_entry, 'ok'
+    return bibtex_entry_str, r, 'ok'
 
-def dois_to_crossref_bibtex_entries(store):
-    print_verbose_level('dois_to_crossref_bibtex_entries  ....')
-    store_search ={}
-    # list of search
+def dois_to_bibtex_entries(store):
+    """
+    Fetch BibTeX entries for all DOIs in the store.
+    
+    Args:
+        store: Dictionary containing entry data with crossref_doi
+    """
+    print_verbose_level('dois_to_bibtex_entries  ....')
+    store_search = {}
+    # Build list of entries to search
     for key in store:
-        #print(store[key])
-        #print(store[key]['crossref_query_status'])
         if store[key].get('crossref_query_status', '') == 'ok':
             if store[key].get('crossref_bibtex_status', '') != 'ok':
-                store_search[key] =store[key]
+                store_search[key] = store[key]
             else:
-                print_verbose_level('   use cache for ', store[key]['input']['ID'])
+                print_verbose_level('   use cache for ',
+                                    store[key]['input']['ID'])
         else:
-            print_verbose_level('crossref query for ', store[key]['input']['ID'], ' has failed')
+            print_verbose_level('crossref query for ',
+                                store[key]['input']['ID'], ' has failed')
 
     t = Timer()
     t.start()
-    if len (store_search) >0 :
-        n_jobs= min(len(store_search),opts.number_of_parallel_request)
-        results=Parallel(n_jobs=n_jobs)( delayed(doi_to_crossref_bibtex_entry)(store[key]['crossref_doi']) for key in store_search)
+    if len(store_search) > 0:
+        n_jobs = min(len(store_search), opts.number_of_parallel_request)
+        if doi_to_bibtex_entry_server == 'doi.org':
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(doi_to_doi_org_bibtex_entry)(store[key]['crossref_doi'])
+                for key in store_search)
+        elif doi_to_bibtex_entry_server == 'crossref':
+            results = Parallel(n_jobs=n_jobs)(
+                delayed(doi_to_crossref_bibtex_entry)(store[key]['crossref_doi'])
+                for key in store_search)
+ 
     t.stop()
 
     for cnt, key in enumerate(store_search):
-        bibtex_entry_str,json_entry, status  = results[cnt]
-        store[key]['crossref_bibtex_status'] = status
+        bibtex_entry_str, json_entry, status = results[cnt]
+        store[key]['doi_to_bibtex_status'] = status
         if status == 'ok':
-            store[key]['crossref_json_entry']=json_entry
-            #print(bibtex_entry_str)
+            store[key]['crossref_json_entry'] = json_entry
             bp = BibTexParser(interpolate_strings=False)
             bib_database = bp.parse(bibtex_entry_str)
-            entry_nb =0
-            for e in bib_database.entries: # to be improved
-                entry_nb = entry_nb +1
-            if (entry_nb ==0) :
-                store[key]['crossref_bibtex_status'] = '!ok'
-                print_verbose_level('WARNING:    bad format for bibtex from crossref', store[key]['input']['ID'])
+            entry_nb = 0
+            for e in bib_database.entries:
+                entry_nb = entry_nb + 1
+            if entry_nb == 0:
+                store[key]['doi_to_bibtex_status'] = '!ok'
+                print_verbose_level(
+                    'WARNING:    bad format for bibtex from server (crossref or doi.org)',
+                    store[key]['input']['ID'])
             else:
-                for e in bib_database.entries: # to be improved
-                    store[key]['crossref_bibtex_entry']  = e
+                for e in bib_database.entries:
+                    store[key]['crossref_bibtex_entry'] = e
                     break
-   
 
 
-# ----------------------
-# unpaywall function
-# ----------------------
-#https://pypi.org/project/unpywall/
+# =============================================================================
+# Unpaywall API functions
+# =============================================================================
+# https://pypi.org/project/unpywall/
 
 from unpywall.utils import UnpywallCredentials
 UnpywallCredentials('vincent.acary@inria.fr')
 from unpywall import Unpywall
 
-def unpywall_query(title, is_oa):
 
+def unpywall_query(title, is_oa):
+    """
+    Query Unpaywall API by title.
+    
+    Args:
+        title: Publication title
+        is_oa: Filter for open access only
+        
+    Returns:
+        tuple: (query_result, message, status)
+    """
     try:
         query = Unpywall.query(query=title, is_oa=is_oa, errors='ignore')
         if query is not None:
-            # for k in query.keys():
-            #     print(query[k])
-            msg =  '{Unpywall.query on title returns results with is_oa='+ str(is_oa) +  '}'
+            msg = '{Unpywall.query on title returns results with is_oa=' + str(
+                is_oa) + '}'
             print_verbose_level(msg)
             status = 'query ok'
         else:
-            # print(type(query), query)
-            msg =  '{Unpywall.query on title  returns None with is_oa='+ str(is_oa) +  '}'
+            msg = '{Unpywall.query on title  returns None with is_oa=' + str(
+                is_oa) + '}'
             print_verbose_level(msg)
             status = 'query none'
-
-    except Exception as e :
-        query=None
-        msg = '[warning]: Unpywall.query on title on unpaywall failed !!!'+ e
+    except Exception as e:
+        query = None
+        msg = '[warning]: Unpywall.query on title on unpaywall failed !!!' + e
         print_verbose_level(msg)
         status = 'not found'
         input()
@@ -333,155 +412,189 @@ def unpywall_query(title, is_oa):
 
 
 def unpywall_doi(doi):
+    """
+    Query Unpaywall API by DOI.
+    
+    Args:
+        doi: DOI string
+        
+    Returns:
+        tuple: (query_result, message, status)
+    """
     try:
-        query = Unpywall.doi(dois=[doi],  errors='ignore') # progress=True
-        #doi_query = Unpywall.query(query=doi_query['doi'][0], is_oa=True)
-        #print(doi_query)
+        query = Unpywall.doi(dois=[doi], errors='ignore')
         if query is not None:
-            msg =  '{Unpywall.doi returns results}'
-            # for k in query.keys():
-            #     print(query[k])
+            msg = '{Unpywall.doi returns results}'
             status = 'doi found'
         else:
-            # print(type(query), query)
-            print_verbose_level('[error]: doi query on unpaywall is None !!!')
-            msg =  '{Unpywall.doi returns None}'
+            print_verbose_level(
+                '[error]: doi query on unpaywall is None !!!')
+            msg = '{Unpywall.doi returns None}'
             status = 'doi not found'
-
-    except Exception as e :
+    except Exception as e:
         print_verbose_level('[warning]: Unpywall.doi  failed !!!', e)
-        msg =  '{Unpywall.doi failed}' +e
+        msg = '{Unpywall.doi failed}' + e
         status = 'doi failed'
 
     return query, msg, status
 
 
 def unpaywall_get_oai_url(doi_query):
-    oai_url='oai url not found'
-    status='oai url not found'
+    """
+    Extract OAI URL from Unpaywall query result.
+    
+    Args:
+        doi_query: Unpaywall query result DataFrame
+        
+    Returns:
+        tuple: (oai_url, status)
+    """
+    oai_url = 'oai url not found'
+    status = 'oai url not found'
 
     if doi_query.get('best_oa_location.url_for_pdf') is not None:
         if doi_query['best_oa_location.url_for_pdf'][0] is not None:
-            oai_url=urllib.parse.unquote(doi_query['best_oa_location.url_for_pdf'][0],  errors='replace')
-            status='oai url found'
+            oai_url = urllib.parse.unquote(
+                doi_query['best_oa_location.url_for_pdf'][0],
+                errors='replace')
+            status = 'oai url found'
             print_verbose_level('unpaywall oai url:', oai_url)
 
     if doi_query.get('best_oa_location.url') is not None:
         if doi_query.get('best_oa_location.url')[0] is not None:
-            oai_url=urllib.parse.unquote(doi_query['best_oa_location.url'][0],  errors='replace')
-            status='oai url found'
+            oai_url = urllib.parse.unquote(
+                doi_query.get('best_oa_location.url')[0], errors='replace')
+            status = 'oai url found'
             print_verbose_level('unpaywall oai url:', oai_url)
 
     if doi_query.get('best_oa_location.url_for_landing_page') is not None:
         if doi_query.get('best_oa_location.url_for_landing_page')[0] is not None:
-            oai_url=urllib.parse.unquote(doi_query['best_oa_location.url_for_landing_page'][0],  errors='replace')
-            status='oai url found'
+            oai_url = urllib.parse.unquote(
+                doi_query.get('best_oa_location.url_for_landing_page')[0],
+                errors='replace')
+            status = 'oai url found'
             print_verbose_level('unpaywall oai url:', oai_url)
 
     return oai_url, status
 
-def unpaywall_oais_from_crossref_dois(entries,store):
 
-
-
+def unpaywall_oais_from_crossref_dois(entries, store):
+    """
+    Query Unpaywall for all entries with valid Crossref DOIs.
+    
+    Args:
+        entries: List of BibTeX entries
+        store: Dictionary containing entry data
+    """
     t = Timer()
     t.start()
-    results=Parallel(n_jobs=len(entries))(delayed(unpywall_doi)(store[entry.get('ID')]['crossref_doi']) for entry in entries)
+    results = Parallel(n_jobs=len(entries))(
+        delayed(unpywall_doi)(store[entry.get('ID')]['crossref_doi'])
+        for entry in entries)
     t.stop()
 
     cnt = 0
     for entry in entries:
         doi_query, unpaywall_msg, unpaywall_status = results[cnt]
 
-        store[entry.get('ID')]['unpaywall_msg'] =  unpaywall_msg
-        store[entry.get('ID')]['unpaywall_status'] =  [unpaywall_status]
+        store[entry.get('ID')]['unpaywall_msg'] = unpaywall_msg
+        store[entry.get('ID')]['unpaywall_status'] = [unpaywall_status]
 
-        if doi_query is not None :
-
+        if doi_query is not None:
             if opts.output_unpaywall_data:
-                doi_query_dict= doi_query.to_dict('dict')
+                doi_query_dict = doi_query.to_dict('dict')
                 print(doi_query_dict)
-                store[entry.get('ID')]['unpaywall_data'] =json.dumps(doi_query_dict, indent=4)
+                store[entry.get('ID')]['unpaywall_data'] = json.dumps(
+                    doi_query_dict, indent=4)
 
             if unpaywall_status == 'doi found':
-                oai_url, status  = unpaywall_get_oai_url(doi_query)
-                store[entry.get('ID')]['oai_url']=  oai_url
+                oai_url, status = unpaywall_get_oai_url(doi_query)
+                store[entry.get('ID')]['oai_url'] = oai_url
                 store[entry.get('ID')]['unpaywall_status'].append(status)
 
-                # test if OAI is arviv or hal
-                oai_host_type=None
-                oai_repository_institution=None
+                # Detect if OAI is from arXiv or HAL
+                oai_host_type = None
+                oai_repository_institution = None
 
                 if doi_query.get('best_oa_location.host_type') is not None:
-                    oai_host_type= doi_query.get('best_oa_location.host_type')[0]
-                if doi_query.get('best_oa_location.repository_institution') is not None:
-                    oai_repository_institution= doi_query.get('best_oa_location.repository_institution')[0]
+                    oai_host_type = doi_query.get(
+                        'best_oa_location.host_type')[0]
+                if doi_query.get(
+                        'best_oa_location.repository_institution') is not None:
+                    oai_repository_institution = doi_query.get(
+                        'best_oa_location.repository_institution')[0]
 
-                if (oai_host_type == 'repository') and (oai_repository_institution is not None):
+                if (oai_host_type == 'repository' and
+                        oai_repository_institution is not None):
                     if 'arXiv' in oai_repository_institution:
                         print(doi_query)
-                        store[entry.get('ID')]['oai_url_for_landing_page'] = doi_query.get('best_oa_location.url_for_landing_page')[0]
-                        print('landing: ',store[entry.get('ID')]['oai_url_for_landing_page'])
-                        store[entry.get('ID')]['oai_type']=  'arXiv'
-                        #input()
+                        store[entry.get('ID')]['oai_url_for_landing_page'] = \
+                            doi_query.get('best_oa_location.url_for_landing_page')[0]
+                        print('landing: ',
+                              store[entry.get('ID')]['oai_url_for_landing_page'])
+                        store[entry.get('ID')]['oai_type'] = 'arXiv'
                     if 'HAL' in oai_repository_institution:
-                        store[entry.get('ID')]['oai_type']=  'HAL'
-                        store[entry.get('ID')]['oai_url_for_landing_page'] = doi_query.get('best_oa_location.url_for_landing_page')[0]
-                        print('landing: ',store[entry.get('ID')]['oai_url_for_landing_page'])
+                        store[entry.get('ID')]['oai_type'] = 'HAL'
+                        store[entry.get('ID')]['oai_url_for_landing_page'] = \
+                            doi_query.get('best_oa_location.url_for_landing_page')[0]
+                        print('landing: ',
+                              store[entry.get('ID')]['oai_url_for_landing_page'])
 
-                    # if 'CiteSeer' in oai_repository_institution:
-                    #     store[entry.get('ID')]['oai_type']=  'CiteSeer'
-                #print (oai_host_type, oai_repository_institution)
-                #input()
-
-        cnt= cnt+1
+        cnt = cnt + 1
 
 
 def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
-
-    #print(opts.skip_double_check)
-    #print(input_bibtex_entry.get('ID'))
+    """
+    Validate Crossref entry against input entry.
+    
+    Compares entry type, year, and title to ensure the Crossref result
+    matches the original input.
+    
+    Args:
+        input_bibtex_entry: Original BibTeX entry from input file
+        crossref_bibtex_entry: BibTeX entry from Crossref
+        
+    Returns:
+        tuple: (status, check_details)
+            status: 'valid', '!valid', 'skipped', or 'valid forced'
+            check_details: String describing what was checked
+    """
     flag_skip = input_bibtex_entry.get('ID') in opts.skip_double_check
+    flag_forced_valid = input_bibtex_entry.get(
+        'ID') in opts.forced_valid_crossref_entry
 
-    flag_forced_valid= input_bibtex_entry.get('ID') in opts.forced_valid_crossref_entry
+    check = ''
+    flag = True
 
-    check= ''
-    flag=True
-
-    # ------------------------------
-    # -------- check input_bibtex_entry type
-    #  (useful for same title and year for a conference and journal publication )
-    # ------------------------------
-
-    if input_bibtex_entry.get('ENTRYTYPE') != crossref_bibtex_entry.get('ENTRYTYPE')  :
+    # Check entry type (useful when same title/year for conference and journal)
+    if input_bibtex_entry.get('ENTRYTYPE') != crossref_bibtex_entry.get(
+            'ENTRYTYPE'):
         check += 'entry type: !ok '
-        flag= flag and False
-        print_verbose_level('[Warning] input_bibtex_entry type are different.', input_bibtex_entry.get('ENTRYTYPE'), crossref_bibtex_entry.get('ENTRYTYPE'))
-        # if opts.stop_on_bad_check and not flag_skip:
-        #     print_verbose_level('press a key to continue')
-        #     input()
+        flag = flag and False
+        print_verbose_level(
+            '[Warning] input_bibtex_entry type are different.',
+            input_bibtex_entry.get('ENTRYTYPE'),
+            crossref_bibtex_entry.get('ENTRYTYPE'))
+        print('| ', input_bibtex_entry.get('ID'), ' | type are different | ' )
 
-
-    # ------------------------------
-    # -------- check year
-    # ------------------------------
+    # Check year
     year_1_text = input_bibtex_entry.get('year', '')
     date = input_bibtex_entry.get('date', '')
-    if year_1_text  == '':
-        if date == '' :
+    if year_1_text == '':
+        if date == '':
             print_verbose_level('[Warning] missing year and date in input file')
         else:
             year_1_text = date.split('-')[0]
 
     year_2_text = crossref_bibtex_entry.get('year', '')
 
-    if year_1_text !=  year_2_text and year_2_text != '':
+    if year_1_text != year_2_text and year_2_text != '':
         check += 'year: !ok '
-        flag= flag and False
-        print_verbose_level('[Warning] years are different.\n year in input bibtex :', year_1_text, '\n year crossref bibtex :', year_2_text)
-        # if opts.stop_on_bad_check and not flag_skip:
-        #     print_verbose_level('press a key to continue')
-        #     input()
+        flag = flag and False
+        print_verbose_level(
+            '[Warning] years are different.\n year in input bibtex :',
+            year_1_text, '\n year crossref bibtex :', year_2_text)
+        print('\n| ', input_bibtex_entry.get('ID'), ' | years are different |\n ' )
     elif year_2_text == '':
         check += 'year: none(2)'
     elif year_1_text == '':
@@ -489,48 +602,40 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
     else:
         check += 'year: ok '
 
-    # ------------------------------
-    # -------- check title
-    # ------------------------------
-
-    document_1_text = input_bibtex_entry.get('title', '').lower().replace('{','').replace('}','')
-    document_2_text = crossref_bibtex_entry.get('title', '').lower().replace('{','').replace('}','')
-    document_2_text = document_2_text.replace('\\textquotesingle','\'').replace('\\textendash', '--').replace('\\textemdash','-')
-
+    # Check title
+    document_1_text = input_bibtex_entry.get('title', '').lower().replace(
+        '{', '').replace('}', '')
+    document_2_text = crossref_bibtex_entry.get('title', '').lower().replace(
+        '{', '').replace('}', '')
+    document_2_text = document_2_text.replace('\\textquotesingle', "'").replace(
+        '\\textendash', '--').replace('\\textemdash', '-')
 
     document_1_words = document_1_text.split()
     document_2_words = document_2_text.split()
-    common = set(document_1_words).intersection( set(document_2_words) )
-    intersection = set(document_1_words).symmetric_difference( set(document_2_words) )
-    #input()
-    if len(intersection) < 1 :
+    common = set(document_1_words).intersection(set(document_2_words))
+    intersection = set(document_1_words).symmetric_difference(
+        set(document_2_words))
+
+    if len(intersection) < 1:
         check += 'title: ok+ '
         flag = flag and True
-    elif len(intersection) < 3 :
+    elif len(intersection) < 3:
         check += 'title: ok- '
         flag = flag and True
-        #print(common, intersection)
         print_verbose_level('[Warning] small difference in title', intersection)
+        print('| ', input_bibtex_entry.get('ID'), '\n| small difference in title  |\n' )
     else:
         check += 'title: !ok '
         flag = flag and False
         if opts.stop_on_bad_check and not flag_skip:
-            print_verbose_level('[Warning] title in input bibtex:\n', document_1_text, '\n')
-            print_verbose_level('[Warning] title in crossref bibtex:\n', document_2_text, '\n')
+            print_verbose_level('[Warning] title in input bibtex:\n',
+                                document_1_text, '\n')
+            print_verbose_level('[Warning] title in crossref bibtex:\n',
+                                document_2_text, '\n')
             print('difference: ', intersection, len(intersection))
-            # print_verbose_level('error: large difference in title', intersection)
-            # print_verbose_level('press a key to continue')
-            # input()
-
-    # ------------------------------
-    # -------- check other author ?
-    # ------------------------------
-    # todo
-
-
+            print('\n| ', input_bibtex_entry.get('ID'), ' | title are different |\n' )
+            
     if not flag and opts.stop_on_bad_check:
-
-
         print_verbose_level('input bibtex entry :')
         writer = BibTexWriter()
         db = BibDatabase()
@@ -542,217 +647,229 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
         db.entries.append(crossref_bibtex_entry)
         print(writer.write(db))
 
-        print_verbose_level('hints: you may manually add crossref_doi ={foo} in the input entry of the bibtex file to fix the issue ')
-        if  opts.stop_on_bad_check and not flag_skip and not flag_forced_valid:
+        print_verbose_level(
+            'hints: you may manually add crossref_doi ={foo} in the input entry '
+            'of the bibtex file to fix the issue ')
+        if opts.stop_on_bad_check and not flag_skip and not flag_forced_valid:
             print_verbose_level('press a key to continue')
             input()
 
-
-    if flag :
+    if flag:
         status = 'valid'
     else:
         status = '!valid'
 
-    if  flag_skip:
+    if flag_skip:
         status = 'skipped'
 
-
-    if  flag_forced_valid:
+    if flag_forced_valid:
         status = 'valid'
         check += 'forced valid'
 
-    return status,  check
+    return status, check
+
 
 import json
-import urllib # to have url complient with  Latex
+import urllib  # For URL encoding compliant with LaTeX
 
 
 def add_tag_doi_in_entry(doi, entry):
-
+    """
+    Add DOI tag to a BibTeX entry.
+    
+    Args:
+        doi: DOI string
+        entry: BibTeX entry dictionary
+        
+    Returns:
+        str: Action description
+    """
     entry['crossref_doi'] = doi
 
     if entry.get('addendum_item'):
         entry['addendum_item'].append('\\tagDOI{' + entry['crossref_doi'] + '}')
     else:
-        entry['addendum_item']= ['\\tagDOI{' + entry['crossref_doi'] + '}']
+        entry['addendum_item'] = ['\\tagDOI{' + entry['crossref_doi'] + '}']
 
     return 'add doi'
 
-def add_tag_oai_url_in_entry(store_key, entry):
 
+def add_tag_oai_url_in_entry(store_key, entry):
+    """
+    Add OAI URL tag to a BibTeX entry.
+    
+    Args:
+        store_key: Store dictionary for the entry
+        entry: BibTeX entry dictionary
+        
+    Returns:
+        str: Action description
+    """
     oai_url = store_key['oai_url']
     entry['unpaywalloaiurl'] = oai_url
     latex_tag = None
 
-    if  store_key.get('oai_type') == 'arXiv':
-        latex_tag='\\tagARXIV{'
+    if store_key.get('oai_type') == 'arXiv':
+        latex_tag = '\\tagARXIV{'
         oai_url = store_key['oai_url_for_landing_page']
         print(oai_url)
     elif store_key.get('oai_type') == 'HAL':
-        #print(store_key)
-        fake_landing_page=  store_key['oai_url_for_landing_page']
-        #print('fake_landing_page', fake_landing_page)
+        fake_landing_page = store_key['oai_url_for_landing_page']
         fake_landing_page_split = fake_landing_page.split('/file/')
-        #print('fake_landing_page_split', fake_landing_page_split)
-        if len(fake_landing_page_split) > 1  :
-            #     #print(fake_landing_page_split)
-            #     for e in reversed(fake_landing_page_split):
-            #         if e[:4] == 'hal-':
-            #             oai_url = e
-            #             break
-            #     #hal_number = fake_landing_page.split('hal-')[1].split('/')[0]
-            #     #oai_url = 'hal-' + hal_number
-            #     #print(oai_url)
-            #     #input()
-            latex_tag='\\tagHAL{'
+        if len(fake_landing_page_split) > 1:
+            latex_tag = '\\tagHAL{'
             oai_url = fake_landing_page_split[0]
         else:
-            # else:
-            #     print('no hal number')
-            #     latex_tag = '\\tagOAI{'
-            #     oai_url = fake_landing_page
-            #     print(oai_url)
-            latex_tag='\\tagHAL{'
+            latex_tag = '\\tagHAL{'
             oai_url = store_key['oai_url_for_landing_page']
         print(oai_url)
-        #input()
     else:
-        latex_tag='\\tagOAI{'
+        latex_tag = '\\tagOAI{'
 
     if latex_tag is not None:
         if entry.get('addendum_item'):
-            entry['addendum_item'].append(latex_tag +  oai_url+ '}')
+            entry['addendum_item'].append(latex_tag + oai_url + '}')
         else:
-            entry['addendum_item']= [latex_tag +  oai_url + '}']
-
+            entry['addendum_item'] = [latex_tag + oai_url + '}']
 
     return 'add oai'
 
+
 def complete_addendum_in_entry(entry):
-    if  entry.get('addendum'):
+    """Merge addendum_item list into addendum field."""
+    if entry.get('addendum'):
         addendum = entry['addendum']
-        if  entry.get('addendum_item'):
+        if entry.get('addendum_item'):
             entry['addendum_item'].append(addendum)
             print('addendum[item]', entry.get('addendum_item'))
         input()
-    if  entry.get('addendum_item'):
-        entry['addendum'] =  ', '.join(entry['addendum_item'])
+    if entry.get('addendum_item'):
+        entry['addendum'] = ', '.join(entry['addendum_item'])
         entry.pop('addendum_item')
 
 
 def astyle_author_crossref_bibtex(crossref_author):
+    """
+    Format author names from Crossref BibTeX style.
+    
+    Args:
+        crossref_author: Author string from Crossref
+        
+    Returns:
+        str: Formatted author string
+    """
     author_list = crossref_author.split(' and ')
-    new_author_list =[]
+    new_author_list = []
     for a in author_list:
-        #print(a)
         ll = a.split(' ')
         lastname = ll.pop().lower()
         firstname = ' '.join(ll).lower()
         new_author_list.append(lastname.title() + ', ' + firstname.title())
-        #print(new_author_list[-1])
-    author_bibtex = ' and ' .join(new_author_list)
-    #print('author_bibtex', author_bibtex)
+    author_bibtex = ' and '.join(new_author_list)
     return author_bibtex
 
+
 def astyle_author_crossref_json(json_entry):
+    """
+    Format author names from Crossref JSON response.
+    
+    Args:
+        json_entry: JSON string from Crossref
+        
+    Returns:
+        str: Formatted author string
+    """
     d = json.loads(json_entry)
-    author=d['author']
-    author_bibtex =[]
+    author = d['author']
+    author_bibtex = []
     for a in author:
-        if a.get('family', None) :
+        if a.get('family', None):
             family = a['family']
             if family.isupper():
                 family = family.title()
 
-            if a.get('given', None) :
+            if a.get('given', None):
                 given = a['given']
-                author_bibtex.append(family+ ', ' +given)
+                author_bibtex.append(family + ', ' + given)
             else:
                 author_bibtex.append(family)
 
-    author_bibtex = ' and ' .join(author_bibtex)
-    #print('author_bibtex', author_bibtex)
+    author_bibtex = ' and '.join(author_bibtex)
     return author_bibtex
 
 
-
-
 def ad_hoc_build_output_bibtex_entries(store):
+    """
+    Build final output BibTeX entries from all gathered data.
+    
+    Args:
+        store: Dictionary containing all entry data
+    """
     print_verbose_level('ad_hoc_build_output_bibtex_entries')
 
-    k=0
+    k = 0
     for key in store:
-
-        if store[key].get('duplicate', False) :
+        if store[key].get('duplicate', False):
             continue
 
-        input_bibtex_entry=store[key]['input']
+        input_bibtex_entry = store[key]['input']
 
-        if  store[key].get('crossref_bibtex_status', '') != 'ok':
-            store[key]['output_bibtex_entry']=input_bibtex_entry
+        if store[key].get('doi_to_bibtex_status', '') != 'ok':
+            store[key]['output_bibtex_entry'] = input_bibtex_entry
             continue
 
-
-        crossref_bibtex_entry=store[key]['crossref_bibtex_entry']
-        print_verbose_level('## bibtex_entry ', k ,' ID : ', input_bibtex_entry.get('ID'))
-
+        crossref_bibtex_entry = store[key]['crossref_bibtex_entry']
+        print_verbose_level('## bibtex_entry ', k, ' ID : ',
+                            input_bibtex_entry.get('ID'))
 
         writer = BibTexWriter()
         db = BibDatabase()
         db.entries.append(input_bibtex_entry)
-        #db.entries.append(crossref_bibtex_entry)
-        print_verbose_level('Original input bibtex entry: \n' , writer.write(db))
-        #print('------')
+        print_verbose_level('Original input bibtex entry: \n', writer.write(db))
         writer = BibTexWriter()
         db = BibDatabase()
-        #db.entries.append(input_bibtex_entry)
         db.entries.append(crossref_bibtex_entry)
-        print_verbose_level('crossref bibtex entry: \n' , writer.write(db))
-        #print('------')
+        print_verbose_level('crossref bibtex entry: \n', writer.write(db))
 
+        store[key]['action'] = ['', '']
 
+        # Start from base entry
+        store[key]['output_bibtex_entry'] = input_bibtex_entry
+        output_bibtex_entry = store[key]['output_bibtex_entry']
 
-        store[key]['action'] = ['','']
-
-        # start from base_entry
-
-        store[key]['output_bibtex_entry']=input_bibtex_entry
-        output_bibtex_entry=store[key]['output_bibtex_entry']
-
-        if not (input_bibtex_entry['ID']  in opts.skip_double_check):
-
-            if store[key]['crossref_doi_status'] == 'valid' :
-
-                #use_entry = ['journal', 'author', 'title',
-                #            'publisher', 'volume', 'number', 'booktitle', 'pages']
-                use_entry = ['journal', 'author',
-                            'publisher', 'volume', 'number', 'booktitle', 'pages']
+        if not (input_bibtex_entry['ID'] in opts.skip_double_check):
+            if store[key]['crossref_doi_status'] == 'valid':
+                use_entry = ['journal', 'author', 'publisher', 'volume',
+                             'number', 'booktitle', 'pages']
 
                 for i in range(len(opts.keep_entry)):
-                    if opts.keep_entry[i] == input_bibtex_entry['ID'] :
-                        if opts.keep_entry[i+1] in use_entry:
-                            use_entry.remove(opts.keep_entry[i+1])
+                    if opts.keep_entry[i] == input_bibtex_entry['ID']:
+                        if opts.keep_entry[i + 1] in use_entry:
+                            use_entry.remove(opts.keep_entry[i + 1])
 
                 for bkey in use_entry:
                     if crossref_bibtex_entry.get(bkey):
                         if bkey == 'author':
-                            #print(crossref_bibtex_entry.get(bkey))
-                            output_bibtex_entry[bkey]= astyle_author_crossref_bibtex(crossref_bibtex_entry.get(bkey))
-                            output_bibtex_entry[bkey]= astyle_author_crossref_json(store[key]['crossref_json_entry'])
+                            output_bibtex_entry[bkey] = \
+                                astyle_author_crossref_bibtex(
+                                    crossref_bibtex_entry.get(bkey))
+                            # output_bibtex_entry[bkey] = \
+                            #     astyle_author_crossref_json(
+                            #         store[key]['crossref_json_entry'])
                         else:
-                            output_bibtex_entry[bkey]= crossref_bibtex_entry[bkey]
+                            output_bibtex_entry[bkey] = \
+                                crossref_bibtex_entry[bkey]
 
-                #output_bibtex_entry['journal']= crossref_bibtex_entry['journal']
-                store[key]['action'] [0] = add_tag_doi_in_entry(store[key]['crossref_doi'], output_bibtex_entry)
+                store[key]['action'][0] = add_tag_doi_in_entry(
+                    store[key]['crossref_doi'], output_bibtex_entry)
 
-                if store[key]['unpaywall_status'][1] == 'oai url found' :
-                    #output_bibtex_entry['year']= crossref_bibtex_entry['journal']
-                    #output_bibtex_entry['journal']= crossref_bibtex_entry['journal']
-                    store[key]['action'] [1] = add_tag_oai_url_in_entry(store[key], output_bibtex_entry)
+                if store[key]['unpaywall_status'][1] == 'oai url found':
+                    store[key]['action'][1] = add_tag_oai_url_in_entry(
+                        store[key], output_bibtex_entry)
 
                 complete_addendum_in_entry(output_bibtex_entry)
 
-
+        # Remove unwanted fields
         if output_bibtex_entry.get('month'):
             output_bibtex_entry.pop('month')
         if output_bibtex_entry.get('pdf'):
@@ -765,123 +882,92 @@ def ad_hoc_build_output_bibtex_entries(store):
             if output_bibtex_entry.get('number'):
                 output_bibtex_entry.pop('number')
 
-
-#        if output_bibtex_entry.get('isbn'):
-#            print('isbn', output_bibtex_entry.get('isbn'))
-
-
         writer = BibTexWriter()
         db = BibDatabase()
-        #db.entries.append(entry)
-        #db.entries.append(crossref_bibtex_entry)
         db.entries.append(output_bibtex_entry)
-        print_verbose_level('output edited bibtex entry: \n' , writer.write(db))
+        print_verbose_level('output edited bibtex entry: \n', writer.write(db))
         print('------')
 
-        # intersection = set(entry.keys()).symmetric_difference( output_bibtex_entry.keys() )
-        # if 'addendum' in intersection:
-        #     intersection.remove('addendum')
-        # if 'unpaywall_doi'in intersection:
-        #     intersection.remove('unpaywall_doi')
-        # if 'unpaywalloaiurl'in intersection:
-        #     intersection.remove('unpaywalloaiurl')
-        # print(intersection)
-
-        # for k in intersection:
-        #     if entry.get(k):
-        #         output_bibtex_entry[k] = entry.get(k)
-
-        #print_verbose_level('End')
-        #input()
-        k= k+1
+        k = k + 1
 
 
-
-# ------------------------------
-# -------- main part
-# -------------------------------
+# =============================================================================
+# Main script
+# =============================================================================
 
 opts = Options()
 opts.parse()
 
 verbose_level = 1
 
+
 def print_verbose_level(*args, **kwargs):
+    """Print message if verbose mode is enabled."""
     if verbose_level:
         print('[jtcam_bibtex_editing]', *args, **kwargs)
 
-base_filename =  os.path.splitext(opts.filename)[0]
+
+base_filename = os.path.splitext(opts.filename)[0]
 if os.path.exists(opts.filename):
-    output_file = base_filename+'_edited.bib'
+    output_file = base_filename + '_edited.bib'
 else:
     print_verbose_level('bib file', opts.filename, 'is not existing')
     exit(0)
 
-#file='../../PAPERS/2021_Mar_6906/Biblio_Corre2020_JTCAM.bib'
+# Header format for verbose output sections
+format_verbose_header = (
+    ' ' + '-' * 42 +
+    '------------------------------------------------#\n' + ' ' * 18 +
+    ' {:<40}  ------------------------------------------------#')
 
-# -------- bibtex parsing start
-# 1. Parsing of the bibtex entry with `bibtexparser`
-# -------- bibtex parsing end
-
-format_verbose_header = ' '+'-'*42  +'------------------------------------------------#\n'+  ' '*18 + ' {:<40}  ------------------------------------------------#'
+# =============================================================================
+# 1. Parse input BibTeX file
+# =============================================================================
 print_verbose_level(format_verbose_header.format('1. Parse input bibtex file'))
-
-
 
 from bibtexparser import load, dumps
 from bibtexparser.bparser import BibTexParser
 from bibtexparser.bwriter import BibTexWriter
 from bibtexparser.bibdatabase import BibDatabase, as_text
-with open(opts.filename) as bibtex_file:
-    # old way
-    #bib_database = load(bibtex_file)
 
+with open(opts.filename) as bibtex_file:
     bibtex_str = bibtex_file.read()
-    #we use the option interpolate_strings=False foo string that are not defined
-    bp = BibTexParser(interpolate_strings=False,ignore_nonstandard_types=False)
+    # Use interpolate_strings=False to handle undefined strings
+    bp = BibTexParser(interpolate_strings=False,
+                      ignore_nonstandard_types=False)
     bib_database = bp.parse(bibtex_str)
 
-
 n_bibtex_entries = len(bib_database.entries)
-
-# for entry in bib_database.entries:
-#     entry_id = entry.get('ID')
-#     print('entry_id', entry_id)
-
-
 print_verbose_level('# number of  entries (input) ', n_bibtex_entries)
 
 bib_database.entries = bib_database.entries[:opts.max_entry]
 
-
-# -------- bibtex parsing end
-
-
-# We build a store dictionnary for collecting
-# - input entry
-# - output entry
-# - crossref entry
-# - extra info on query, doi, oai, ....
-
+# =============================================================================
+# Initialize data store
+# =============================================================================
+# The store dictionary collects:
+# - input entry: original BibTeX entry from input file
+# - output entry: final processed BibTeX entry
+# - crossref entry: entry retrieved from Crossref
+# - extra info: query status, DOI, OAI URL, etc.
 
 import pickle
 
 pickle_name = base_filename + '_cache.pickle'
 
 if os.path.exists(pickle_name):
-    #print('open pickle file')
     with open(pickle_name, 'rb') as handle:
         store = pickle.load(handle)
 else:
     store = {}
 
-# remove entry in store that is no longer in bib input file
-current_entries= [entry.get('ID') for entry in bib_database.entries]
+# Remove entries from cache that are no longer in the input file
+current_entries = [entry.get('ID') for entry in bib_database.entries]
 entry_to_pop = []
 for entry in store:
     print(entry)
     if entry not in current_entries:
-        print('entry in cache ', entry,' no longer in input bibtex file')
+        print('entry in cache ', entry, ' no longer in input bibtex file')
         entry_to_pop.append(entry)
 for e in entry_to_pop:
     store.pop(e)
@@ -889,27 +975,28 @@ for e in entry_to_pop:
 for entry in bib_database.entries:
     entry_id = entry.get('ID')
     dict_entry = store.get(entry_id, {})
-    if dict_entry == {} :
+    if dict_entry == {}:
         store[entry_id] = {}
         store[entry_id]['input'] = entry
     else:
-        # compare dict_entry['input'] with entry
-        if dict_entry['input'] == entry :
-            print_verbose_level('    entry' , entry_id,' has not changed. we use cache information')
+        # Compare cached entry with current entry
+        if dict_entry['input'] == entry:
+            print_verbose_level('    entry', entry_id,
+                                ' has not changed. we use cache information')
         else:
             store[entry_id] = {}
             store[entry_id]['input'] = entry
-            print_verbose_level('    entry' , entry_id,' has changed. cache is removed')
+            print_verbose_level('    entry', entry_id,
+                                ' has changed. cache is removed')
 
-
-
-
-# 2. Crossref doi search with the crossref API using habanero.
-#    the most relevent doi is stored in `crossref_doi`
-#    - we use it to do a query on crossref with the ['author', 'title', 'year', 'journal'] of the bibtex entry
-#    - we do not use the input key `doi` since we do not want it in the final key `doi`
-# 	   if the author set the key `doi`, rename it as `crossref_doi`
-#   - the doi can be set in the input file in `crossef_doi`. In that case, the Crossref doi search is not done
+# =============================================================================
+# 2. Crossref DOI search
+# =============================================================================
+# Search for DOIs using the Crossref API with habanero.
+# The most relevant DOI is stored in 'crossref_doi'.
+# - Query is built from ['author', 'title', 'year'] of the BibTeX entry
+# - The input 'doi' key is not used (to avoid keeping it in output)
+# - If 'crossref_doi' is set in input, the search is skipped
 print_verbose_level(format_verbose_header.format('2. Crossref doi seach'))
 
 bibtex_entries_to_crossref_dois(store)
@@ -917,63 +1004,60 @@ bibtex_entries_to_crossref_dois(store)
 with open(pickle_name, 'wb') as handle:
     pickle.dump(store, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-
-
-# 3. bibtex entry query on Crossref using `crossref_doi`
-#   - A bibtex entry is requested to Crossref from `crossref_doi`
-
+# =============================================================================
+# 3. Get BibTeX entries from Crossref using DOIs
+# =============================================================================
 print_verbose_level(format_verbose_header.format('3. get bibtex from crossef '))
 
-
-dois_to_crossref_bibtex_entries(store)
+dois_to_bibtex_entries(store)
 
 with open(pickle_name, 'wb') as handle:
     pickle.dump(store, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
+# =============================================================================
+# 4. Validate Crossref entries
+# =============================================================================
+# Validation checks year, title, author, and entry type.
+# For valid entries, remove duplicates (entries with the same valid DOIs).
+print_verbose_level(
+    format_verbose_header.format('4. validation of crossref_bibtex_entry '))
 
-# 4. Validation of the crossref bibtex entry
-#  - the validation is based on year title author ad entry type.
-#  - for valid ntries, we remove duplicate (entries with the same valid DOIs)
-print_verbose_level(format_verbose_header.format('4. validation of crossref_bibtex_entry '))
-
-k=0
-valid_crossref_bib_db=BibDatabase()
+k = 0
+valid_crossref_bib_db = BibDatabase()
 for key in store:
     entry = store[key]['input']
     check = '--'
-    print_verbose_level('## entry ', k ,': ', entry.get('ID'))
+    print_verbose_level('## entry ', k, ': ', entry.get('ID'))
 
-    if store[key].get('crossref_bibtex_status', '') == 'ok':
-        # keep the entry ID of the input to keep track
-        # pprint.pprint(store[key])
-        store[key]['crossref_bibtex_entry_key'] = store[key]['crossref_bibtex_entry']['ID']
+    if store[key].get('doi_to_bibtex_status', '') == 'ok':
+        # Keep the entry ID from input to maintain tracking
+        store[key]['crossref_bibtex_entry_key'] = \
+            store[key]['crossref_bibtex_entry']['ID']
         store[key]['crossref_bibtex_entry']['ID'] = store[key]['input']['ID']
 
-        status, check = double_check_bibtex_entries(entry, store[key]['crossref_bibtex_entry'])
+        status, check = double_check_bibtex_entries(
+            entry, store[key]['crossref_bibtex_entry'])
 
         print_verbose_level(status, check)
-        store[key]['check']= check
-        store[key]['crossref_doi_status'] =status
+        store[key]['check'] = check
+        store[key]['crossref_doi_status'] = status
         if status == 'valid':
-            valid_crossref_bib_db.entries.append(store[key]['crossref_bibtex_entry'])
+            valid_crossref_bib_db.entries.append(
+                store[key]['crossref_bibtex_entry'])
     else:
         store[key]['crossref_doi_status'] = 'failed'
 
+    print_verbose_level('validation results : ', store[key]['crossref_doi_status'],
+                        '\n')
+    k = k + 1
 
-    print_verbose_level('validation results : ', store[key]['crossref_doi_status'], '\n')
-
-    k=k+1
-
-#  - we remove duplicate of valid entries with the same DOI
+# Remove duplicate entries with the same DOI
 dois = []
 for key in store:
-    #print('key',store[key]['crossref_doi'])
     if store[key].get('crossref_doi_status', '') == 'valid':
         crossref_doi = store[key].get('crossref_doi', None)
         if crossref_doi is not None:
-            dois.append([crossref_doi,key])
-
-#print(dois)
+            dois.append([crossref_doi, key])
 
 seen = set()
 duplicates = []
@@ -983,43 +1067,37 @@ for x in dois:
         duplicates.append(x)
     else:
         seen.add(x[0])
-#print(duplicates)
 
 for d in duplicates:
-    #print('entry', d[1], 'is duplicate. We do not treat it')
     store[d[1]]['duplicate'] = True
-    #store.pop(d[1])
 
 n_duplicate_bibtex_entries = len(duplicates)
 
-#input()
-
-
-
-
-
-
-
-
-# 5. We use the validated  `crossref_doi`  to make oai query on Unpaywall
+# =============================================================================
+# 5. Query Unpaywall for OAI URLs
+# =============================================================================
 print_verbose_level(format_verbose_header.format('5. unpaywall oai from doi '))
+
 unpaywall_oais_from_crossref_dois(valid_crossref_bib_db.entries, store)
 
 with open(pickle_name, 'wb') as handle:
     pickle.dump(store, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-# 6. We try to merge at best info from crossref and unpaywall
-#   - `journal` is taken from crossref
-#   - ....
-
+# =============================================================================
+# 6. Build output BibTeX entries
+# =============================================================================
+# Merge information from Crossref and Unpaywall:
+# - 'journal' is taken from Crossref
+# - DOI tags and OAI tags are added
 print_verbose_level(format_verbose_header.format('6. build output bibtex entry '))
 ad_hoc_build_output_bibtex_entries(store)
 
+# =============================================================================
+# 7. Generate summary report
+# =============================================================================
+e_idx = 0
 
-# summary
-e_idx=0
-
-fmt_string =  '# {:<6} {:<30} {:<10} {:<10} {:<40} {:<10} {:<10}'
+fmt_string = '# {:<6} {:<30} {:<10} {:<10} {:<40} {:<10} {:<10}'
 
 print_verbose_level(format_verbose_header.format('7. Report'))
 
@@ -1038,167 +1116,141 @@ print_verbose_level(fmt_string.format('',
                                       '',
                                       'unpaywall msg'))
 for key in store:
-
-    if store[key].get('duplicate', False) :
+    if store[key].get('duplicate', False):
         print_verbose_level(fmt_string.format(e_idx,
                                               str(store[key]['input'].get('ID')),
                                               'duplicate',
                                               '',
                                               '',
                                               '',
-                                              ''
-                                              )
-                            )
-
-
+                                              ''))
     else:
         print_verbose_level(fmt_string.format(e_idx,
                                               str(store[key]['input'].get('ID')),
                                               str(store[key].get('crossref_query_status')),
                                               str(store[key]['crossref_doi_status']),
                                               str(store[key].get('check')),
-                                              str(store[key].get('action',[' '])[0]),
-                                              str(store[key].get('unpaywall_status'))
-                                              )
-                            )
+                                              str(store[key].get('action', [' '])[0]),
+                                              str(store[key].get('unpaywall_status'))))
         print_verbose_level(fmt_string.format('',
                                               '',
                                               '',
                                               '',
                                               '',
                                               str(store[key].get('action', [' ', ' '])[1]),
-                                              str(store[key].get('unpaywall_msg'))
-                                              )
-                            )
+                                              str(store[key].get('unpaywall_msg'))))
+    e_idx = e_idx + 1
 
-    # keep_copy_editing = True
-    # if keep_copy_editing :
-    #     output_bibtex_entry['action'] = ' '.join(output_bibtex_entry['action'])
-    #     if  output_bibtex_entry.get('unpaywall_status'):
-    #         output_bibtex_entry['unpaywall_status'] = ' '.join(output_bibtex_entry['unpaywall_status'])
-    # else:
-    #     output_bibtex_entry.pop('crossref_doi_status')
-    #     output_bibtex_entry.pop('crossref_query_status')
-    #     if  output_bibtex_entry.get('unpaywall_msg'):
-    #         output_bibtex_entry.pop('unpaywall_msg')
-    #     if  output_bibtex_entry.get('unpaywall_status'):
-    #         output_bibtex_entry.pop('unpaywall_status')
-
-    #     output_bibtex_entry.pop('check')
-    #     output_bibtex_entry.pop('action')
-
-    e_idx=e_idx+1
-#     if e_idx >= opts.max_output_bibtex_entry:
-#         break
-
-
+# =============================================================================
+# 8. Write output BibTeX file
+# =============================================================================
 print_verbose_level(format_verbose_header.format('8. Write  output bibtex file '))
 
-
-edited_bib_db=BibDatabase()
+edited_bib_db = BibDatabase()
 for key in store:
-    if store[key].get('duplicate', False) :
+    if store[key].get('duplicate', False):
         continue
     edited_bib_db.entries.append(store[key]['output_bibtex_entry'])
 
 n_edited_bibtex_entries = len(edited_bib_db.entries)
 print_verbose_level('## number of  entries (input) ', n_bibtex_entries)
-print_verbose_level('## number of  duplicate entries (input) ', n_duplicate_bibtex_entries)
+print_verbose_level('## number of  duplicate entries (input) ',
+                    n_duplicate_bibtex_entries)
 print_verbose_level('## number of  entries (output) ', n_edited_bibtex_entries)
 
-if n_edited_bibtex_entries + n_duplicate_bibtex_entries != n_bibtex_entries :
-    print_verbose_level('[WARNING]: The number of output entries is not same as the input', n_edited_bibtex_entries, '!=', n_bibtex_entries + n_duplicate_bibtex_entries)
+if n_edited_bibtex_entries + n_duplicate_bibtex_entries != n_bibtex_entries:
+    print_verbose_level(
+        '[WARNING]: The number of output entries is not same as the input',
+        n_edited_bibtex_entries, '!=', n_bibtex_entries + n_duplicate_bibtex_entries)
     print_verbose_level('######## \n\n')
 
-
 writer = BibTexWriter()
-#writer.contents = ['comments', 'entries']
-#writer.indent = '  '
-#writer.order_entries_by = ('ENTRYTYPE', 'author', 'year')
-writer.display_order=['author','title','journal', 'year']
+writer.display_order = ['author', 'title', 'journal', 'year']
 with open(output_file, 'w') as bibfile:
     bibtex_str = dumps(edited_bib_db, writer)
     bibfile.write(bibtex_str)
 
 
-
-# 9. Some replacements are made to avoid curious Latex or html symbols in bibtex entries
-print_verbose_level(format_verbose_header.format('9. Replacements of Latex or html symbols in bibtex entries '))
+# =============================================================================
+# 9. Clean up LaTeX and HTML symbols
+# =============================================================================
+print_verbose_level(
+    format_verbose_header.format('9. Replacements of Latex or html symbols in bibtex entries '))
 
 
 def replace_curious_character(output_file):
-    text_to_replace =[('$\mathsemicolon$', ';'),
-                      ('{\&}amp;', '\&'),
-                      ('&amp;', '\&'),
-                      ('À', '{\`A}'),
-                      ('\i', 'i'),
-                      ('–', '-'),
-                      ]
+    """
+    Replace problematic characters in the output file.
+    
+    Fixes common LaTeX and HTML encoding issues.
+    """
+    text_to_replace = [('$\\mathsemicolon$', ';'),
+                       ('{\\&}amp;', '\\&'),
+                       ('&amp;', '\\&'),
+                       ('À', '{\\`A}'),
+                       ('\\i', 'i'),
+                       ('–', '-'),
+                       ]
 
     for item in text_to_replace:
-        # read the current contents of the file
+        # Read the current contents of the file
         f = open(output_file, "r")
-        lines= f.readlines()
+        lines = f.readlines()
         f.close()
 
         new_lines = []
         for line in lines:
-            #print('line', line)
-            line_replacement= line
-            if item[0] in line :
-    #             #print('line', line)
-                 print('Match Found. replace ', item[0], ' by ', item[1], '  in',  line)
-                 line_replacement= line.replace( item[0], item[1] )
-            #print('line_replacement', line_replacement)
+            line_replacement = line
+            if item[0] in line:
+                print('Match Found. replace ', item[0], ' by ', item[1],
+                      '  in', line)
+                line_replacement = line.replace(item[0], item[1])
             new_lines.append(line_replacement)
-        f = open(output_file, "w",  encoding="utf-8")
+        f = open(output_file, "w", encoding="utf-8")
         for line in new_lines:
             f.write(line)
         f.close()
 
-        #print('new_lines', new_lines)
 
 replace_curious_character(output_file)
 
 
-
 def line_prepender(filename, line):
+    """Add a line at the beginning of a file."""
     with open(filename, 'r+') as f:
         content = f.read()
         f.seek(0, 0)
         f.write(line.rstrip('\r\n') + '\n' + content)
 
 
-cartrigde = \
-"@Comment{This file has been generated with the script jtcam_bibtex_editing.py}\n" + \
-"@Comment{Do not edit it directly by yourself. Modify  the source file if needed}"
+# Add header comment to output file
+cartridge = \
+    "@Comment{This file has been generated with the script jtcam_bibtex_editing.py}\n" + \
+    "@Comment{Do not edit it directly by yourself. Modify  the source file if needed}"
 
-line_prepender(output_file, cartrigde)
+line_prepender(output_file, cartridge)
 
 import fileinput
 
-
-
-
+# =============================================================================
+# 10. Split output into individual files (optional)
+# =============================================================================
 if opts.split_output:
     print_verbose_level(format_verbose_header.format('10. Splitted bib entries'))
     list_bib_file = []
     for entry in edited_bib_db.entries:
-        #print('\n\n\n entry in bib ', entry)
-        #print(entry)
-
-        # create a tmp bibtex file
+        # Create a temporary BibTeX file for each entry
         writer = BibTexWriter()
-        edited_bib=BibDatabase()
+        edited_bib = BibDatabase()
         edited_bib.entries.append(entry)
-        dir_name= 'splitted_bibtex_entries'
+        dir_name = 'splitted_bibtex_entries'
         if not os.path.exists(dir_name):
             os.mkdir(dir_name)
 
-        output_file= os.path.join(dir_name,entry['ID'] +'.bib')
+        output_file = os.path.join(dir_name, entry['ID'] + '.bib')
 
         str_file = r"\ "[0]
-        str_file = str_file  +'addbibresource{' + output_file + '}'
+        str_file = str_file + 'addbibresource{' + output_file + '}'
 
         list_bib_file.append(str_file)
 
@@ -1213,8 +1265,3 @@ if opts.split_output:
 
     print_verbose_level('splitted bib entries are in the folder : splitted_bibtex_entries ')
     print_verbose_level('\\input(splitted_bib_entries.tex) to use it')
-
-
-
-
-#print(r)
