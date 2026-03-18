@@ -231,7 +231,7 @@ def bibtex_entries_to_crossref_dois(store):
             # Use existing doi from input, skip search
             print_verbose_level('    use user input doi for ', entry_id)
             store[key]['crossref_query_status'] = 'ok'
-            store[key]['crossref_doi'] = entry.get('doi')
+            store[key]['found_doi'] = entry.get('doi')
             continue
         else:
             if store[key].get('crossref_query_status', '') != 'ok':
@@ -259,7 +259,7 @@ def bibtex_entries_to_crossref_dois(store):
         if results[cnt]['status'] == 'ok':
             doi = crossref_get_doi_from_query_results(results[cnt])
             if doi is not None:
-                store[entry_id]['crossref_doi'] = doi
+                store[entry_id]['found_doi'] = doi
                 store[entry_id]['crossref_query_status'] = results[cnt]['status']
             else:
                 store[entry_id]['crossref_query_status'] = 'bad'
@@ -305,12 +305,18 @@ def doi_to_doi_org_bibtex_entry(doi):
         r = requests.get(url, headers=headers, timeout=20)
         bibtex_entry_str = r.text
         #print(r.text)
-        
+        #print(r)
+        headers = {"Accept": "application/vnd.citationstyles.csl+json"}
+        r1 = requests.get(url, headers=headers, timeout=20)
+        #print(type(r1.json()))
+        json_entry = r1.json()
+        #print(json_entry)
+
     except Exception as e:
         print('cn.content_negotiation exception', e)
         return None, None, '!ok'
 
-    return bibtex_entry_str, r, 'ok'
+    return bibtex_entry_str, json_entry, 'ok'
 
 def dois_to_bibtex_entries(store):
     """
@@ -324,7 +330,7 @@ def dois_to_bibtex_entries(store):
     # Build list of entries to search
     for key in store:
         if store[key].get('crossref_query_status', '') == 'ok':
-            if store[key].get('crossref_bibtex_status', '') != 'ok':
+            if store[key].get('doi_to_bibtex_status', '') != 'ok':
                 store_search[key] = store[key]
             else:
                 print_verbose_level('   use cache for ',
@@ -339,11 +345,11 @@ def dois_to_bibtex_entries(store):
         n_jobs = min(len(store_search), opts.number_of_parallel_request)
         if doi_to_bibtex_entry_server == 'doi.org':
             results = Parallel(n_jobs=n_jobs)(
-                delayed(doi_to_doi_org_bibtex_entry)(store[key]['crossref_doi'])
+                delayed(doi_to_doi_org_bibtex_entry)(store[key]['found_doi'])
                 for key in store_search)
         elif doi_to_bibtex_entry_server == 'crossref':
             results = Parallel(n_jobs=n_jobs)(
-                delayed(doi_to_crossref_bibtex_entry)(store[key]['crossref_doi'])
+                delayed(doi_to_crossref_bibtex_entry)(store[key]['found_doi'])
                 for key in store_search)
  
     t.stop()
@@ -489,7 +495,7 @@ def unpaywall_oais_from_crossref_dois(entries, store):
     t = Timer()
     t.start()
     results = Parallel(n_jobs=len(entries))(
-        delayed(unpywall_doi)(store[entry.get('ID')]['crossref_doi'])
+        delayed(unpywall_doi)(store[entry.get('ID')]['found_doi'])
         for entry in entries)
     t.stop()
 
@@ -779,7 +785,13 @@ def astyle_author_crossref_json(json_entry):
     Returns:
         str: Formatted author string
     """
-    d = json.loads(json_entry)
+    
+    if doi_to_bibtex_entry_server == 'doi.org':
+        d=json_entry
+    else:
+        d = json.loads(json_entry)
+
+    
     author = d['author']
     author_bibtex = []
     for a in author:
@@ -838,7 +850,7 @@ def ad_hoc_build_output_bibtex_entries(store):
         output_bibtex_entry = store[key]['output_bibtex_entry']
 
         if not (input_bibtex_entry['ID'] in opts.skip_double_check):
-            if store[key]['crossref_doi_status'] == 'valid':
+            if store[key]['found_doi_status'] == 'valid':
                 use_entry = ['journal', 'author', 'publisher', 'volume',
                              'number', 'booktitle', 'pages']
 
@@ -853,19 +865,20 @@ def ad_hoc_build_output_bibtex_entries(store):
                             output_bibtex_entry[bkey] = \
                                 astyle_author_crossref_bibtex(
                                     crossref_bibtex_entry.get(bkey))
-                            # output_bibtex_entry[bkey] = \
-                            #     astyle_author_crossref_json(
-                            #         store[key]['crossref_json_entry'])
+                            output_bibtex_entry[bkey] = \
+                                astyle_author_crossref_json(
+                                    store[key]['crossref_json_entry'])
                         else:
                             output_bibtex_entry[bkey] = \
                                 crossref_bibtex_entry[bkey]
 
                 store[key]['action'][0] = add_tag_doi_in_entry(
-                    store[key]['crossref_doi'], output_bibtex_entry)
+                    store[key]['found_doi'], output_bibtex_entry)
 
-                if store[key]['unpaywall_status'][1] == 'oai url found':
-                    store[key]['action'][1] = add_tag_oai_url_in_entry(
-                        store[key], output_bibtex_entry)
+                # print('#############', store[key]['unpaywall_status'])
+                # if store[key]['unpaywall_status'][1] == 'oai url found':
+                #     store[key]['action'][1] = add_tag_oai_url_in_entry(
+                #         store[key], output_bibtex_entry)
 
                 complete_addendum_in_entry(output_bibtex_entry)
 
@@ -993,10 +1006,10 @@ for entry in bib_database.entries:
 # 2. Crossref DOI search
 # =============================================================================
 # Search for DOIs using the Crossref API with habanero.
-# The most relevant DOI is stored in 'crossref_doi'.
+# The most relevant DOI is stored in 'found_doi'.
 # - Query is built from ['author', 'title', 'year'] of the BibTeX entry
 # - The input 'doi' key is not used (to avoid keeping it in output)
-# - If 'crossref_doi' is set in input, the search is skipped
+# - If 'crossref_doi' is set in input, it is stored as 'found_doi' and search is skipped
 print_verbose_level(format_verbose_header.format('2. Crossref doi seach'))
 
 bibtex_entries_to_crossref_dois(store)
@@ -1040,24 +1053,24 @@ for key in store:
 
         print_verbose_level(status, check)
         store[key]['check'] = check
-        store[key]['crossref_doi_status'] = status
+        store[key]['found_doi_status'] = status
         if status == 'valid':
             valid_crossref_bib_db.entries.append(
                 store[key]['crossref_bibtex_entry'])
     else:
-        store[key]['crossref_doi_status'] = 'failed'
+        store[key]['found_doi_status'] = 'failed'
 
-    print_verbose_level('validation results : ', store[key]['crossref_doi_status'],
+    print_verbose_level('validation results : ', store[key]['found_doi_status'],
                         '\n')
     k = k + 1
 
 # Remove duplicate entries with the same DOI
 dois = []
 for key in store:
-    if store[key].get('crossref_doi_status', '') == 'valid':
-        crossref_doi = store[key].get('crossref_doi', None)
-        if crossref_doi is not None:
-            dois.append([crossref_doi, key])
+    if store[key].get('found_doi_status', '') == 'valid':
+        found_doi = store[key].get('found_doi', None)
+        if found_doi is not None:
+            dois.append([found_doi, key])
 
 seen = set()
 duplicates = []
@@ -1128,7 +1141,7 @@ for key in store:
         print_verbose_level(fmt_string.format(e_idx,
                                               str(store[key]['input'].get('ID')),
                                               str(store[key].get('crossref_query_status')),
-                                              str(store[key]['crossref_doi_status']),
+                                              str(store[key]['found_doi_status']),
                                               str(store[key].get('check')),
                                               str(store[key].get('action', [' '])[0]),
                                               str(store[key].get('unpaywall_status'))))
