@@ -128,7 +128,7 @@ def retry_with_backoff(
                     # Log retry attempt
                     logger = kwargs.get('logger')
                     if logger:
-                        logger.log(
+                        logger.info(
                             f'[RETRY] {func.__name__} failed (attempt {attempt + 1}/{max_retries + 1}): {e}. '
                             f'Retrying in {delay:.1f}s...'
                         )
@@ -396,38 +396,53 @@ class Config:
 
 
 # =============================================================================
-# Logging
+# Proper Python Logging
 # =============================================================================
 
-class Logger:
+import logging
+import logging.handlers
+
+def setup_logging(verbose: int = 1, log_file: Optional[str] = None) -> logging.Logger:
     """
-    Simple logging class to replace global verbose_level.
+    Configure Python logging with console and optional file output.
     
-    Can be extended to use Python's logging module.
+    Args:
+        verbose: Verbosity level (0=WARNING, 1=INFO, 2=DEBUG)
+        log_file: Optional path to log file
+        
+    Returns:
+        Configured logger instance
     """
+    logger = logging.getLogger('jtcam_bibtex')
+    logger.setLevel(logging.DEBUG)  # Capture all levels, filter at handlers
     
-    def __init__(self, verbose: int = 1):
-        self.verbose = verbose
-        self.prefix = '[jtcam_bibtex_editing]'
+    # Clear any existing handlers
+    logger.handlers = []
     
-    def log(self, *args: Any, **kwargs: Any) -> None:
-        """Print message if verbose mode is enabled."""
-        if self.verbose:
-            print(self.prefix, *args, **kwargs)
+    # Console handler with verbosity-based filtering
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_levels = {0: logging.WARNING, 1: logging.INFO, 2: logging.DEBUG}
+    console_handler.setLevel(console_levels.get(verbose, logging.DEBUG))
     
-    def debug(self, *args: Any, **kwargs: Any) -> None:
-        """Print debug message (verbose >= 2)."""
-        if self.verbose >= 2:
-            print(f'{self.prefix} [DEBUG]', *args, **kwargs)
+    console_format = logging.Formatter(
+        '[%(name)s] %(levelname)s: %(message)s'
+    )
+    console_handler.setFormatter(console_format)
+    logger.addHandler(console_handler)
     
-    def info(self, *args: Any, **kwargs: Any) -> None:
-        """Print info message (verbose >= 1)."""
-        if self.verbose >= 1:
-            print(f'{self.prefix} [INFO]', *args, **kwargs)
+    # Optional file handler (always logs DEBUG and above)
+    if log_file:
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=10*1024*1024, backupCount=5
+        )
+        file_handler.setLevel(logging.DEBUG)
+        file_format = logging.Formatter(
+            '%(asctime)s [%(name)s] %(levelname)s: %(message)s'
+        )
+        file_handler.setFormatter(file_format)
+        logger.addHandler(file_handler)
     
-    def warning(self, *args: Any, **kwargs: Any) -> None:
-        """Print warning message (always)."""
-        print(f'{self.prefix} [WARNING]', *args, **kwargs)
+    return logger
 
 
 # =============================================================================
@@ -437,91 +452,321 @@ from joblib import Parallel, delayed
 
 
 # =============================================================================
-# Crossref API functions
+# API Client Classes
 # =============================================================================
-from habanero import Crossref
-from habanero import cn
+from habanero import Crossref, cn
+from unpywall.utils import UnpywallCredentials
+from unpywall import Unpywall
 
-# Set a mailto address to get into the "polite pool" (higher rate limits)
-Crossref(mailto="jtcam@episciences.org")
-
-
-@retry_with_backoff(
-    max_retries=3,
-    initial_delay=2.0,
-    exceptions=(CrossrefAPIError, ConnectionError, Timeout)
-)
-def crossref_query(bibliographic: str, logger: Logger) -> Dict[str, Any]:
+class CrossrefClient:
     """
-    Query Crossref API for a bibliographic entry.
+    Client for Crossref API interactions.
     
-    Args:
-        bibliographic: Search query string (author, title, year, etc.)
-        logger: Logger instance for output
-        
-    Returns:
-        dict: Crossref API response
-        
-    Raises:
-        CrossrefAPIError: If the API request fails after all retries
+    Encapsulates all Crossref API calls with retry logic and error handling.
     """
-    logger.log(f'crossref query search starts on {bibliographic[:40]:40.40}...')
-    cr = Crossref(
-        base_url="https://api.crossref.org",
-        mailto="jtcam@episciences.org"
+    
+    def __init__(self, mailto: str, logger: Optional[logging.Logger] = None):
+        self.mailto = mailto
+        self.base_url = "https://api.crossref.org"
+        self.client = Crossref(base_url=self.base_url, mailto=mailto)
+        self.logger = logger or logging.getLogger('jtcam_bibtex')
+    
+    @retry_with_backoff(
+        max_retries=3,
+        initial_delay=2.0,
+        exceptions=(CrossrefAPIError, ConnectionError, Timeout)
     )
+    def query(self, bibliographic: str) -> Dict[str, Any]:
+        """
+        Query Crossref by bibliographic information.
+        
+        Args:
+            bibliographic: Search query string
+            
+        Returns:
+            API response dictionary
+            
+        Raises:
+            CrossrefAPIError: If request fails after retries
+        """
+        self.logger.debug(f'Crossref query: {bibliographic[:60]}...')
+        
+        try:
+            response = self.client.works(query_bibliographic=bibliographic, limit=1)
+            self.logger.debug(f'Crossref response status: {response.get("status", "unknown")}')
+            return response
+        except HTTPError as e:
+            status_code = e.response.status_code if hasattr(e, 'response') else None
+            if status_code == 429:
+                retry_after = int(e.response.headers.get('Retry-After', 5))
+                self.logger.warning(f'Rate limited by Crossref. Waiting {retry_after}s...')
+                time.sleep(retry_after)
+                raise CrossrefAPIError(f"Rate limited (429)", status_code=429) from e
+            elif status_code == 503:
+                raise CrossrefAPIError(f"Service unavailable (503)", status_code=503) from e
+            else:
+                self.logger.warning(f'HTTP error from Crossref: {e}')
+                return {'status': 'bad', 'error': str(e), 'status_code': status_code}
+        except (ConnectionError, Timeout) as e:
+            self.logger.warning(f'Connection error to Crossref: {e}')
+            raise CrossrefAPIError(f"Connection failed: {e}") from e
+    
+    @retry_with_backoff(
+        max_retries=2,
+        initial_delay=1.0,
+        exceptions=(CrossrefAPIError, ConnectionError, Timeout)
+    )
+    def get_bibtex(self, doi: str) -> Tuple[Optional[str], Optional[str], str]:
+        """
+        Get BibTeX entry for a DOI using content negotiation.
+        
+        Args:
+            doi: DOI string
+            
+        Returns:
+            Tuple of (bibtex_str, json_str, status)
+        """
+        self.logger.debug(f'Fetching BibTeX for DOI: {doi}')
+        
+        try:
+            bibtex_str = cn.content_negotiation(ids=doi, format="bibentry")
+            json_str = cn.content_negotiation(ids=doi, format="citeproc-json")
+            return bibtex_str, json_str, 'ok'
+        except HTTPError as e:
+            status_code = e.response.status_code if hasattr(e, 'response') else None
+            self.logger.warning(f'HTTP error from Crossref content negotiation: {e}')
+            if status_code == 404:
+                return None, None, 'not_found'
+            elif status_code == 429:
+                raise CrossrefAPIError(f"Rate limited (429)", status_code=429) from e
+            else:
+                return None, None, f'http_error_{status_code}'
+        except (ConnectionError, Timeout) as e:
+            self.logger.warning(f'Connection error to Crossref: {e}')
+            raise CrossrefAPIError(f"Connection failed: {e}") from e
+    
+    @staticmethod
+    def extract_doi(response: Dict[str, Any]) -> Optional[str]:
+        """Extract DOI from Crossref query response."""
+        try:
+            return response['message']['items'][0]['DOI']
+        except (KeyError, IndexError):
+            return None
 
-    try:
-        x = cr.works(query_bibliographic=bibliographic, limit=1)
-    except HTTPError as e:
-        status_code = e.response.status_code if hasattr(e, 'response') else None
-        if status_code == 429:  # Rate limited
-            retry_after = int(e.response.headers.get('Retry-After', 5))
-            logger.log(f'Rate limited by Crossref. Waiting {retry_after}s...')
-            time.sleep(retry_after)
-            raise CrossrefAPIError(
-                f"Rate limited (429)", status_code=429, retry_after=retry_after
-            ) from e
-        elif status_code == 503:  # Service unavailable
-            raise CrossrefAPIError(
-                f"Crossref service unavailable (503)", status_code=503
-            ) from e
-        else:
-            logger.log(f'HTTP error from Crossref: {e}')
-            x = {'status': 'bad', 'error': str(e), 'status_code': status_code}
-    except (ConnectionError, Timeout) as e:
-        logger.log(f'Connection error to Crossref: {e}')
-        raise CrossrefAPIError(f"Connection failed: {e}") from e
-    except Exception as e:
-        logger.log(f'Unexpected error querying Crossref: {e}')
-        x = {'status': 'bad', 'error': str(e)}
 
-    logger.log(f'crossref query search ends on {bibliographic[:40]:40.40} with status {x.get("status", "unknown")}')
-    return x
+class UnpaywallClient:
+    """
+    Client for Unpaywall API interactions.
+    
+    Encapsulates all Unpaywall API calls with retry logic and error handling.
+    """
+    
+    def __init__(self, email: str, logger: Optional[logging.Logger] = None):
+        self.email = email
+        UnpywallCredentials(email)
+        self.logger = logger or logging.getLogger('jtcam_bibtex')
+    
+    @retry_with_backoff(
+        max_retries=3,
+        initial_delay=1.0,
+        exceptions=(UnpaywallAPIError, ConnectionError, Timeout)
+    )
+    def query_by_doi(self, doi: str) -> Tuple[Optional[Any], str, str]:
+        """
+        Query Unpaywall by DOI.
+        
+        Args:
+            doi: DOI string
+            
+        Returns:
+            Tuple of (query_result, message, status)
+        """
+        self.logger.debug(f'Querying Unpaywall for DOI: {doi}')
+        
+        try:
+            query = Unpywall.doi(dois=[doi], errors='ignore')
+            if query is not None:
+                return query, '{Unpywall.doi returns results}', 'doi found'
+            else:
+                return None, '{Unpywall.doi returns None}', 'doi not found'
+        except HTTPError as e:
+            status_code = e.response.status_code if hasattr(e, 'response') else None
+            self.logger.warning(f'HTTP error from Unpaywall: {status_code}')
+            if status_code == 404:
+                return None, '{DOI not found in Unpaywall}', 'doi_not_found'
+            elif status_code == 429:
+                raise UnpaywallAPIError(f"Rate limited (429)", status_code=429) from e
+            else:
+                return None, f'{{Unpywall.doi HTTP error {status_code}}}', f'http_error_{status_code}'
+        except (ConnectionError, Timeout) as e:
+            self.logger.warning(f'Connection error to Unpaywall: {e}')
+            raise UnpaywallAPIError(f"Connection failed: {e}") from e
+        except Exception as e:
+            self.logger.warning(f'Unexpected error from Unpaywall: {e}')
+            return None, f'{{Unpywall.doi failed}}: {str(e)[:100]}', 'doi_failed'
+    
+    def extract_oai_url(self, query_result: Optional[Any]) -> Tuple[str, str]:
+        """
+        Extract OAI URL from Unpaywall query result.
+        
+        Args:
+            query_result: Unpaywall query result DataFrame
+            
+        Returns:
+            Tuple of (oai_url, status)
+        """
+        oai_url = 'oai url not found'
+        status = 'oai url not found'
+        
+        if query_result is None:
+            return oai_url, status
+        
+        # Try different URL fields in order of preference
+        url_fields = [
+            'best_oa_location.url_for_pdf',
+            'best_oa_location.url',
+            'best_oa_location.url_for_landing_page'
+        ]
+        
+        for field in url_fields:
+            value = query_result.get(field)
+            if value is not None and value[0] is not None:
+                oai_url = urllib.parse.unquote(value[0], errors='replace')
+                status = 'oai url found'
+                self.logger.debug(f'Found OAI URL: {oai_url[:80]}...')
+                break
+        
+        return oai_url, status
+    
+    def get_repository_info(self, query_result: Optional[Any]) -> Tuple[Optional[str], Optional[str]]:
+        """
+        Get repository type and institution from query result.
+        
+        Returns:
+            Tuple of (host_type, repository_institution)
+        """
+        if query_result is None:
+            return None, None
+        
+        host_type = None
+        institution = None
+        
+        if query_result.get('best_oa_location.host_type') is not None:
+            host_type = query_result.get('best_oa_location.host_type')[0]
+        
+        if query_result.get('best_oa_location.repository_institution') is not None:
+            institution = query_result.get('best_oa_location.repository_institution')[0]
+        
+        return host_type, institution
+
+
+# =============================================================================
+# Legacy API functions (wrap the new client classes for backward compatibility)
+# =============================================================================
+
+# Module-level helper functions for parallel processing (must be picklable)
+def _crossref_query_worker(bibliographic: str) -> Dict[str, Any]:
+    """Worker function for parallel Crossref queries (creates client inside worker)."""
+    client = CrossrefClient("jtcam@episciences.org")
+    return client.query(bibliographic)
+
+
+def _crossref_get_bibtex_worker(doi: str) -> Tuple[Optional[str], Optional[str], str]:
+    """Worker function for parallel Crossref BibTeX fetch (creates client inside worker)."""
+    client = CrossrefClient("jtcam@episciences.org")
+    return client.get_bibtex(doi)
+
+
+class DOIOrgClient:
+    """
+    Client for doi.org content negotiation.
+    
+    Fetches BibTeX and JSON metadata directly from doi.org using
+    content negotiation headers.
+    """
+    
+    def __init__(self, timeout: int = 30, logger: Optional[logging.Logger] = None):
+        self.timeout = timeout
+        self.base_url = "https://doi.org"
+        self.logger = logger or logging.getLogger('jtcam_bibtex')
+    
+    @retry_with_backoff(
+        max_retries=2,
+        initial_delay=1.0,
+        exceptions=(ConnectionError, Timeout, urllib.error.URLError)
+    )
+    def get_bibtex(self, doi: str) -> Tuple[Optional[str], Optional[str], str]:
+        """
+        Get BibTeX entry for a DOI from doi.org.
+        
+        Args:
+            doi: DOI string
+            
+        Returns:
+            Tuple of (bibtex_str, json_str, status)
+        """
+        self.logger.debug(f'Fetching from doi.org: {doi}')
+        
+        try:
+            # Fetch BibTeX
+            req = urllib.request.Request(
+                url=f"{self.base_url}/{doi}",
+                headers={"Accept": "application/x-bibtex"}
+            )
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                bibtex_str = response.read().decode('utf-8')
+            
+            # Fetch JSON
+            req = urllib.request.Request(
+                url=f"{self.base_url}/{doi}",
+                headers={"Accept": "application/vnd.citationstyles.csl+json"}
+            )
+            with urllib.request.urlopen(req, timeout=self.timeout) as response:
+                json_str = response.read().decode('utf-8')
+            
+            self.logger.debug(f'Successfully fetched from doi.org: {doi}')
+            return bibtex_str, json_str, 'ok'
+            
+        except urllib.error.HTTPError as e:
+            self.logger.warning(f'HTTP error from doi.org: {e.code} {e.reason}')
+            if e.code == 404:
+                return None, None, 'not_found'
+            elif e.code == 429:
+                raise ConnectionError(f"Rate limited by doi.org (429)") from e
+            else:
+                return None, None, f'http_error_{e.code}'
+        except urllib.error.URLError as e:
+            self.logger.warning(f'URL error from doi.org: {e.reason}')
+            raise ConnectionError(f"Failed to connect to doi.org: {e.reason}") from e
+        except TimeoutError as e:
+            self.logger.warning(f'Timeout error from doi.org')
+            raise Timeout("Request to doi.org timed out") from e
+
+
+def _doi_org_fetch_worker(doi: str) -> Tuple[Optional[str], Optional[str], str]:
+    """Worker function for parallel doi.org fetch (creates client inside worker)."""
+    client = DOIOrgClient(timeout=30)
+    return client.get_bibtex(doi)
+
+
+def _unpaywall_doi_worker(doi: str) -> Tuple[Optional[Any], str, str]:
+    """Worker function for parallel Unpaywall queries (creates client inside worker)."""
+    client = UnpaywallClient('vincent.acary@inria.fr')
+    return client.query_by_doi(doi)
 
 
 def crossref_get_doi_from_query_results(x: Dict[str, Any]) -> Optional[str]:
-    """
-    Extract DOI from Crossref query results.
-    
-    Args:
-        x: Crossref API response
-        
-    Returns:
-        DOI string or None if not found
-    """
+    """Extract DOI from Crossref query results."""
     try:
-        doi = x['message']['items'][0]['DOI']
-    except (KeyError, IndexError) as e:
-        print(f'result from crossref has no DOI!! {e}')
-        doi = None
-    return doi
+        return x['message']['items'][0]['DOI']
+    except (KeyError, IndexError):
+        return None
 
 
 def bibtex_entries_to_crossref_dois(
     store: Dict[str, EntryStore],
     config: Config,
-    logger: Logger
+    logger: logging.Logger
 ) -> None:
     """
     Search for DOIs for all BibTeX entries using Crossref.
@@ -529,9 +774,9 @@ def bibtex_entries_to_crossref_dois(
     Args:
         store: Dictionary of EntryStore instances
         config: Configuration options
-        logger: Logger instance
+        logger: logging.Logger instance
     """
-    logger.log('Crossref doi search from bibtex input entry')
+    logger.info('Crossref doi search from bibtex input entry')
     bibliographic: Dict[str, Tuple[Dict[str, Any], str]] = {}
     
     for key, entry_store in store.items():
@@ -539,8 +784,7 @@ def bibtex_entries_to_crossref_dois(
         entry_id = entry.get('ID')
         
         if config.use_input_doi and entry.get('doi'):
-            # Use existing doi from input, skip search
-            logger.log(f'    use user input doi for {entry_id}')
+            logger.info(f'    use user input doi for {entry_id}')
             entry_store.crossref_query_status = 'ok'
             entry_store.found_doi = entry.get('doi')
         else:
@@ -550,24 +794,25 @@ def bibtex_entries_to_crossref_dois(
                 )
                 bibliographic[entry_id] = (entry, query_text)
             else:
-                logger.log(f'    use cache entry for {entry_id}')
+                logger.info(f'    use cache entry for {entry_id}')
     
     if len(bibliographic) > 0:
         timer = Timer()
         timer.start()
         n_jobs = min(len(bibliographic), config.number_of_parallel_request)
+        # Use module-level worker function instead of client method
         results = Parallel(n_jobs=n_jobs)(
-            delayed(crossref_query)(bib[1], logger)
+            delayed(_crossref_query_worker)(bib[1])
             for bib in bibliographic.values()
         )
         timer.stop()
 
         for (entry_id, (entry, _)), result in zip(bibliographic.items(), results):
-            if result['status'] == 'ok':
-                doi = crossref_get_doi_from_query_results(result)
+            if result.get('status') == 'ok':
+                doi = CrossrefClient.extract_doi(result)
                 if doi is not None:
                     store[entry_id].found_doi = doi
-                    store[entry_id].crossref_query_status = result['status']
+                    store[entry_id].crossref_query_status = 'ok'
                 else:
                     store[entry_id].crossref_query_status = 'bad'
 
@@ -575,100 +820,10 @@ def bibtex_entries_to_crossref_dois(
 doi_to_bibtex_entry_server = 'doi.org'
 
 
-@retry_with_backoff(
-    max_retries=2,
-    initial_delay=1.0,
-    exceptions=(CrossrefAPIError, ConnectionError, Timeout)
-)
-def doi_to_crossref_bibtex_entry(doi: str, logger: Logger) -> Tuple[Optional[str], Optional[str], str]:
-    """
-    Get BibTeX entry from DOI using Crossref content negotiation.
-    
-    Args:
-        doi: DOI string
-        logger: Logger instance
-        
-    Returns:
-        Tuple of (bibtex_entry_str, json_entry, status)
-    """
-    cr = Crossref(mailto="jtcam@episciences.org")
-    logger.log(f'crossref cn bibtex .... for {doi}')
-
-    try:
-        bibtex_entry_str = cn.content_negotiation(ids=doi, format="bibentry")
-        json_entry = cn.content_negotiation(ids=doi, format="citeproc-json")
-        return bibtex_entry_str, json_entry, 'ok'
-    except HTTPError as e:
-        status_code = e.response.status_code if hasattr(e, 'response') else None
-        logger.warning(f'HTTP error from Crossref content negotiation: {e}')
-        if status_code == 404:
-            return None, None, 'not_found'
-        elif status_code == 429:
-            raise CrossrefAPIError(f"Rate limited (429)", status_code=429) from e
-        else:
-            return None, None, f'http_error_{status_code}'
-    except (ConnectionError, Timeout) as e:
-        logger.warning(f'Connection error to Crossref: {e}')
-        raise CrossrefAPIError(f"Connection failed: {e}") from e
-    except Exception as e:
-        logger.warning(f'Unexpected error from Crossref content negotiation: {e}')
-        return None, None, f'error: {str(e)}'
-
-
-@retry_with_backoff(
-    max_retries=2,
-    initial_delay=1.0,
-    exceptions=(ConnectionError, Timeout, urllib.error.URLError)
-)
-def doi_to_doi_org_bibtex_entry(doi: str, logger: Logger) -> Tuple[Optional[str], Optional[str], str]:
-    """
-    Get BibTeX entry from DOI using doi.org content negotiation.
-    
-    Args:
-        doi: DOI string
-        logger: Logger instance
-        
-    Returns:
-        Tuple of (bibtex_entry_str, json_entry, status)
-    """
-    import urllib.request
-    import urllib.error
-    logger.log(f'doi.org cn bibtex .... for {doi}')
-
-    try:
-        req = urllib.request.Request(
-            url=f"https://doi.org/{doi}",
-            headers={"Accept": "application/x-bibtex"}
-        )
-        with urllib.request.urlopen(req, timeout=30) as response:
-            bibtex_entry_str = response.read().decode('utf-8')
-        
-        req = urllib.request.Request(
-            url=f"https://doi.org/{doi}",
-            headers={"Accept": "application/vnd.citationstyles.csl+json"}
-        )
-        with urllib.request.urlopen(req, timeout=30) as response:
-            json_entry = response.read().decode('utf-8')
-        
-        return bibtex_entry_str, json_entry, 'ok'
-    except urllib.error.HTTPError as e:
-        logger.warning(f'HTTP error from doi.org: {e.code} {e.reason}')
-        if e.code == 404:
-            return None, None, 'not_found'
-        else:
-            return None, None, f'http_error_{e.code}'
-    except urllib.error.URLError as e:
-        logger.warning(f'URL error from doi.org: {e.reason}')
-        raise ConnectionError(f"Failed to connect to doi.org: {e.reason}") from e
-    except TimeoutError as e:
-        logger.warning(f'Timeout error from doi.org')
-        raise Timeout("Request to doi.org timed out") from e
-
-
 def dois_to_bibtex_entries(
     store: Dict[str, EntryStore],
     config: Config,
-    logger: Logger
+    logger: logging.Logger
 ) -> None:
     """
     Fetch BibTeX entries for all DOIs in the store.
@@ -676,9 +831,9 @@ def dois_to_bibtex_entries(
     Args:
         store: Dictionary of EntryStore instances
         config: Configuration options
-        logger: Logger instance
+        logger: logging.Logger instance
     """
-    logger.log('dois_to_bibtex_entries ....')
+    logger.info('dois_to_bibtex_entries ....')
     store_search: Dict[str, EntryStore] = {}
     
     # Build list of entries to search
@@ -687,9 +842,9 @@ def dois_to_bibtex_entries(
             if entry_store.doi_to_bibtex_status != 'ok':
                 store_search[key] = entry_store
             else:
-                logger.log(f'   use cache for {entry_store.input["ID"]}')
+                logger.info(f'   use cache for {entry_store.input["ID"]}')
         else:
-            logger.log(f'crossref query for {entry_store.input["ID"]} has failed')
+            logger.info(f'crossref query for {entry_store.input["ID"]} has failed')
 
     if len(store_search) > 0:
         timer = Timer()
@@ -697,13 +852,15 @@ def dois_to_bibtex_entries(
         n_jobs = min(len(store_search), config.number_of_parallel_request)
         
         if doi_to_bibtex_entry_server == 'doi.org':
+            # Use doi.org client worker
             results = Parallel(n_jobs=n_jobs)(
-                delayed(doi_to_doi_org_bibtex_entry)(entry.found_doi, logger)
+                delayed(_doi_org_fetch_worker)(entry.found_doi)
                 for entry in store_search.values()
             )
         else:
+            # Use Crossref client worker
             results = Parallel(n_jobs=n_jobs)(
-                delayed(doi_to_crossref_bibtex_entry)(entry.found_doi, logger)
+                delayed(_crossref_get_bibtex_worker)(entry.found_doi)
                 for entry in store_search.values()
             )
         timer.stop()
@@ -720,7 +877,7 @@ def dois_to_bibtex_entries(
                 entries_list = list(bib_database.entries)
                 if len(entries_list) == 0:
                     entry_store.doi_to_bibtex_status = '!ok'
-                    logger.log(f'WARNING: bad format for bibtex from crossref {entry_store.input["ID"]}')
+                    logger.warning(f'WARNING: bad format for bibtex from crossref {entry_store.input["ID"]}')
                 else:
                     entry_store.crossref_bibtex_entry = entries_list[0]
 
@@ -728,10 +885,8 @@ def dois_to_bibtex_entries(
 # =============================================================================
 # Unpaywall API functions
 # =============================================================================
-from unpywall.utils import UnpywallCredentials
-from unpywall import Unpywall
-
-# Initialize Unpaywall credentials
+# Note: Unpaywall imports are at the top with API Client Classes
+# Initialize credentials globally for backward compatibility
 UnpywallCredentials('vincent.acary@inria.fr')
 
 
@@ -740,14 +895,14 @@ UnpywallCredentials('vincent.acary@inria.fr')
     initial_delay=1.0,
     exceptions=(UnpaywallAPIError, ConnectionError, Timeout)
 )
-def unpywall_query(title: str, is_oa: bool, logger: Logger) -> Tuple[Optional[Any], str, str]:
+def unpywall_query(title: str, is_oa: bool, logger: logging.Logger) -> Tuple[Optional[Any], str, str]:
     """
     Query Unpaywall API by title.
     
     Args:
         title: Publication title
         is_oa: Filter for open access only
-        logger: Logger instance
+        logger: logging.Logger instance
         
     Returns:
         Tuple of (query_result, message, status)
@@ -756,29 +911,29 @@ def unpywall_query(title: str, is_oa: bool, logger: Logger) -> Tuple[Optional[An
         query = Unpywall.query(query=title, is_oa=is_oa, errors='ignore')
         if query is not None:
             msg = f'{{Unpywall.query on title returns results with is_oa={is_oa}}}'
-            logger.log(msg)
+            logger.info(msg)
             status = 'query ok'
         else:
             msg = f'{{Unpywall.query on title returns None with is_oa={is_oa}}}'
-            logger.log(msg)
+            logger.info(msg)
             status = 'query none'
     except HTTPError as e:
         status_code = e.response.status_code if hasattr(e, 'response') else None
         query = None
         msg = f'[warning]: Unpywall.query HTTP error {status_code}: {e}'
-        logger.log(msg)
+        logger.info(msg)
         if status_code == 429:
             raise UnpaywallAPIError(f"Rate limited (429)", status_code=429) from e
         status = f'http_error_{status_code}'
     except (ConnectionError, Timeout) as e:
         query = None
         msg = f'[warning]: Unpywall.query connection error: {e}'
-        logger.log(msg)
+        logger.info(msg)
         raise UnpaywallAPIError(f"Connection failed: {e}") from e
     except Exception as e:
         query = None
         msg = f'[warning]: Unpywall.query unexpected error: {e}'
-        logger.log(msg)
+        logger.info(msg)
         status = f'error: {str(e)[:50]}'
     
     return query, msg, status
@@ -789,13 +944,13 @@ def unpywall_query(title: str, is_oa: bool, logger: Logger) -> Tuple[Optional[An
     initial_delay=1.0,
     exceptions=(UnpaywallAPIError, ConnectionError, Timeout)
 )
-def unpywall_doi(doi: str, logger: Logger) -> Tuple[Optional[Any], str, str]:
+def unpywall_doi(doi: str, logger: logging.Logger) -> Tuple[Optional[Any], str, str]:
     """
     Query Unpaywall API by DOI.
     
     Args:
         doi: DOI string
-        logger: Logger instance
+        logger: logging.Logger instance
         
     Returns:
         Tuple of (query_result, message, status)
@@ -806,7 +961,7 @@ def unpywall_doi(doi: str, logger: Logger) -> Tuple[Optional[Any], str, str]:
             msg = '{Unpywall.doi returns results}'
             status = 'doi found'
         else:
-            logger.log('[error]: doi query on unpaywall is None !!!')
+            logger.info('[error]: doi query on unpaywall is None !!!')
             msg = '{Unpywall.doi returns None}'
             status = 'doi not found'
     except HTTPError as e:
@@ -835,13 +990,13 @@ def unpywall_doi(doi: str, logger: Logger) -> Tuple[Optional[Any], str, str]:
     return query, msg, status
 
 
-def unpaywall_get_oai_url(doi_query: Optional[Any], logger: Logger) -> Tuple[str, str]:
+def unpaywall_get_oai_url(doi_query: Optional[Any], logger: logging.Logger) -> Tuple[str, str]:
     """
     Extract OAI URL from Unpaywall query result.
     
     Args:
         doi_query: Unpaywall query result DataFrame
-        logger: Logger instance
+        logger: logging.Logger instance
         
     Returns:
         Tuple of (oai_url, status)
@@ -858,14 +1013,14 @@ def unpaywall_get_oai_url(doi_query: Optional[Any], logger: Logger) -> Tuple[str
                 doi_query['best_oa_location.url_for_pdf'][0],
                 errors='replace')
             status = 'oai url found'
-            logger.log(f'unpaywall oai url: {oai_url}')
+            logger.info(f'unpaywall oai url: {oai_url}')
 
     if doi_query.get('best_oa_location.url') is not None:
         if doi_query.get('best_oa_location.url')[0] is not None:
             oai_url = urllib.parse.unquote(
                 doi_query.get('best_oa_location.url')[0], errors='replace')
             status = 'oai url found'
-            logger.log(f'unpaywall oai url: {oai_url}')
+            logger.info(f'unpaywall oai url: {oai_url}')
 
     if doi_query.get('best_oa_location.url_for_landing_page') is not None:
         if doi_query.get('best_oa_location.url_for_landing_page')[0] is not None:
@@ -873,7 +1028,7 @@ def unpaywall_get_oai_url(doi_query: Optional[Any], logger: Logger) -> Tuple[str
                 doi_query.get('best_oa_location.url_for_landing_page')[0],
                 errors='replace')
             status = 'oai url found'
-            logger.log(f'unpaywall oai url: {oai_url}')
+            logger.info(f'unpaywall oai url: {oai_url}')
 
     return oai_url, status
 
@@ -882,7 +1037,7 @@ def unpaywall_oais_from_crossref_dois(
     entries: List[Dict[str, Any]],
     store: Dict[str, EntryStore],
     config: Config,
-    logger: Logger
+    logger: logging.Logger
 ) -> None:
     """
     Query Unpaywall for all entries with valid Crossref DOIs.
@@ -891,15 +1046,16 @@ def unpaywall_oais_from_crossref_dois(
         entries: List of BibTeX entries
         store: Dictionary of EntryStore instances
         config: Configuration options
-        logger: Logger instance
+        logger: logging.Logger instance
     """
     if not entries:
         return
     
     timer = Timer()
     timer.start()
+    # Use module-level worker function instead of passing logger
     results = Parallel(n_jobs=len(entries))(
-        delayed(unpywall_doi)(store[entry.get('ID')].found_doi, logger)
+        delayed(_unpaywall_doi_worker)(store[entry.get('ID')].found_doi)
         for entry in entries
     )
     timer.stop()
@@ -975,7 +1131,7 @@ class InteractiveDecisions:
         """Check if any decisions were made."""
         return bool(self.forced or self.skipped)
     
-    def print_suggestions(self, config: Config, logger: Logger) -> None:
+    def print_suggestions(self, config: Config, logger: logging.Logger) -> None:
         """Print command-line suggestions based on decisions."""
         if not self.has_decisions():
             return
@@ -1020,7 +1176,7 @@ class InteractiveDecisions:
         ])
         
         for line in lines:
-            logger.log(line)
+            logger.info(line)
 
 
 def interactive_menu(
@@ -1028,7 +1184,7 @@ def interactive_menu(
     input_bibtex_entry: Dict[str, Any],
     crossref_bibtex_entry: Dict[str, Any],
     decisions: InteractiveDecisions,
-    logger: Logger
+    logger: logging.Logger
 ) -> Tuple[bool, bool]:
     """
     Show interactive menu for invalid entries.
@@ -1038,7 +1194,7 @@ def interactive_menu(
         input_bibtex_entry: Original BibTeX entry
         crossref_bibtex_entry: Crossref BibTeX entry
         decisions: InteractiveDecisions instance to track choices
-        logger: Logger instance
+        logger: logging.Logger instance
         
     Returns:
         Tuple of (flag_skip, flag_forced_valid)
@@ -1085,7 +1241,7 @@ def double_check_bibtex_entries(
     crossref_bibtex_entry: Dict[str, Any],
     config: Config,
     decisions: InteractiveDecisions,
-    logger: Logger
+    logger: logging.Logger
 ) -> Tuple[str, str]:
     """
     Validate Crossref entry against input entry.
@@ -1095,7 +1251,7 @@ def double_check_bibtex_entries(
         crossref_bibtex_entry: BibTeX entry from Crossref
         config: Configuration options
         decisions: InteractiveDecisions to track user choices
-        logger: Logger instance
+        logger: logging.Logger instance
         
     Returns:
         Tuple of (status, check_details)
@@ -1113,7 +1269,7 @@ def double_check_bibtex_entries(
     if input_bibtex_entry.get('ENTRYTYPE') != crossref_bibtex_entry.get('ENTRYTYPE'):
         check += 'entry type: !ok '
         flag = False
-        logger.log(
+        logger.info(
             f'[Warning] input_bibtex_entry type are different.',
             input_bibtex_entry.get('ENTRYTYPE'),
             crossref_bibtex_entry.get('ENTRYTYPE')
@@ -1125,7 +1281,7 @@ def double_check_bibtex_entries(
     date = input_bibtex_entry.get('date', '')
     if year_1_text == '':
         if date == '':
-            logger.log('[Warning] missing year and date in input file')
+            logger.info('[Warning] missing year and date in input file')
         else:
             year_1_text = date.split('-')[0]
 
@@ -1134,7 +1290,7 @@ def double_check_bibtex_entries(
     if year_1_text != year_2_text and year_2_text != '':
         check += 'year: !ok '
         flag = False
-        logger.log(
+        logger.info(
             f'[Warning] years are different.\n year in input bibtex : {year_1_text}\n'
             f' year crossref bibtex : {year_2_text}'
         )
@@ -1159,33 +1315,33 @@ def double_check_bibtex_entries(
         check += 'title: ok+ '
     elif len(intersection) < 3:
         check += 'title: ok- '
-        logger.log(f'[Warning] small difference in title {intersection}')
+        logger.info(f'[Warning] small difference in title {intersection}')
         print(f'| {entry_id}\n| small difference in title |\n')
     else:
         check += 'title: !ok '
         flag = False
         if config.stop_on_bad_check and not flag_skip:
-            logger.log(f'[Warning] title in input bibtex:\n{document_1_text}\n')
-            logger.log(f'[Warning] title in crossref bibtex:\n{document_2_text}\n')
+            logger.info(f'[Warning] title in input bibtex:\n{document_1_text}\n')
+            logger.info(f'[Warning] title in crossref bibtex:\n{document_2_text}\n')
             print(f'difference: {intersection} {len(intersection)}')
             print(f'\n| {entry_id} | title are different |\n')
             
     if not flag and config.stop_on_bad_check:
 
         
-        logger.log('input bibtex entry :')
+        logger.info('input bibtex entry :')
         writer = BibTexWriter()
         db = BibDatabase()
         db.entries.append(input_bibtex_entry)
         print(writer.write(db))
         
-        logger.log('crossref bibtex entry :')
+        logger.info('crossref bibtex entry :')
         writer = BibTexWriter()
         db = BibDatabase()
         db.entries.append(crossref_bibtex_entry)
         print(writer.write(db))
 
-        logger.log(
+        logger.info(
             'hints: you may manually add crossref_doi ={foo} in the input entry '
             'of the bibtex file to fix the issue '
         )
@@ -1345,7 +1501,7 @@ def astyle_author_crossref_json(json_entry: str) -> str:
 def ad_hoc_build_output_bibtex_entries(
     store: Dict[str, EntryStore],
     config: Config,
-    logger: Logger
+    logger: logging.Logger
 ) -> None:
     """
     Build final output BibTeX entries from all gathered data.
@@ -1353,9 +1509,9 @@ def ad_hoc_build_output_bibtex_entries(
     Args:
         store: Dictionary of EntryStore instances
         config: Configuration options
-        logger: Logger instance
+        logger: logging.Logger instance
     """
-    logger.log('ad_hoc_build_output_bibtex_entries')
+    logger.info('ad_hoc_build_output_bibtex_entries')
 
 
 
@@ -1372,17 +1528,17 @@ def ad_hoc_build_output_bibtex_entries(
 
         crossref_bibtex_entry = entry_store.crossref_bibtex_entry
         entry_id = input_bibtex_entry.get('ID')
-        logger.log(f'## bibtex_entry {k} ID : {entry_id}')
+        logger.info(f'## bibtex_entry {k} ID : {entry_id}')
 
         writer = BibTexWriter()
         db = BibDatabase()
         db.entries.append(input_bibtex_entry)
-        logger.log(f'Original input bibtex entry: \n{writer.write(db)}')
+        logger.info(f'Original input bibtex entry: \n{writer.write(db)}')
         
         writer = BibTexWriter()
         db = BibDatabase()
         db.entries.append(crossref_bibtex_entry)
-        logger.log(f'crossref bibtex entry: \n{writer.write(db)}')
+        logger.info(f'crossref bibtex entry: \n{writer.write(db)}')
 
         entry_store.action = ['', '']
 
@@ -1432,7 +1588,7 @@ def ad_hoc_build_output_bibtex_entries(
         writer = BibTexWriter()
         db = BibDatabase()
         db.entries.append(output_bibtex_entry)
-        logger.log(f'output edited bibtex entry: \n{writer.write(db)}')
+        logger.info(f'output edited bibtex entry: \n{writer.write(db)}')
 
 
         k += 1
@@ -1446,7 +1602,7 @@ class BibtexIO:
     """Handle all BibTeX file I/O operations."""
     
     @staticmethod
-    def load(filepath: str, logger: Logger) -> 'BibDatabase':
+    def load(filepath: str, logger: logging.Logger) -> 'BibDatabase':
         """Load BibTeX file and return parsed database."""
 
         
@@ -1509,9 +1665,9 @@ class BibtexProcessor:
     Encapsulates all processing logic and state, eliminating global variables.
     """
     
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, log_file: Optional[str] = None):
         self.config = config
-        self.logger = Logger(config.verbose)
+        self.logger = setup_logging(config.verbose, log_file)
         self.decisions = InteractiveDecisions()
         self.store: Dict[str, EntryStore] = {}
         self.base_filename = os.path.splitext(config.filename)[0] if config.filename else ''
@@ -1543,7 +1699,7 @@ class BibtexProcessor:
         current_entries = {entry.get('ID') for entry in bib_database.entries}
         keys_to_remove = [k for k in self.store if k not in current_entries]
         for k in keys_to_remove:
-            self.logger.log(f'entry in cache {k} no longer in input bibtex file')
+            self.logger.info(f'entry in cache {k} no longer in input bibtex file')
             del self.store[k]
         
         # Update or create EntryStore for each entry
@@ -1553,9 +1709,9 @@ class BibtexProcessor:
             if entry_id in self.store:
                 existing = self.store[entry_id]
                 if existing.input == entry:
-                    self.logger.log(f'    entry {entry_id} has not changed. using cache')
+                    self.logger.info(f'    entry {entry_id} has not changed. using cache')
                 else:
-                    self.logger.log(f'    entry {entry_id} has changed. cache removed')
+                    self.logger.info(f'    entry {entry_id} has changed. cache removed')
                     self.store[entry_id] = EntryStore(input=entry)
             else:
                 self.store[entry_id] = EntryStore(input=entry)
@@ -1585,18 +1741,18 @@ class BibtexProcessor:
         fmt_string = '# {:<6} {:<30} {:<10} {:<10} {:<40} {:<10} {:<10}'
         
         header = ' ' + '-' * 42 + '------------------------------------------------#\n' + ' ' * 18 + ' {:<40}  ------------------------------------------------#'
-        self.logger.log(header.format('7. Report'))
+        self.logger.info(header.format('7. Report'))
         
-        self.logger.log(fmt_string.format('number', 'id', 'doi query', 'doi', 'check', 'action', 'unpaywall status'))
-        self.logger.log(fmt_string.format('', '', '', '', '', '', 'unpaywall msg'))
+        self.logger.info(fmt_string.format('number', 'id', 'doi query', 'doi', 'check', 'action', 'unpaywall status'))
+        self.logger.info(fmt_string.format('', '', '', '', '', '', 'unpaywall msg'))
         
         for key, entry_store in self.store.items():
             entry_id = entry_store.input.get('ID')
             
             if entry_store.duplicate:
-                self.logger.log(fmt_string.format(e_idx, entry_id, 'duplicate', '', '', '', ''))
+                self.logger.info(fmt_string.format(e_idx, entry_id, 'duplicate', '', '', '', ''))
             else:
-                self.logger.log(fmt_string.format(
+                self.logger.info(fmt_string.format(
                     e_idx, entry_id,
                     str(entry_store.crossref_query_status),
                     str(entry_store.found_doi_status),
@@ -1604,7 +1760,7 @@ class BibtexProcessor:
                     str(entry_store.action[0] if entry_store.action else ' '),
                     str(entry_store.unpaywall_status)
                 ))
-                self.logger.log(fmt_string.format(
+                self.logger.info(fmt_string.format(
                     '', '', '', '', '',
                     str(entry_store.action[1] if len(entry_store.action) > 1 else ' '),
                     str(entry_store.unpaywall_msg)
@@ -1662,12 +1818,12 @@ class BibtexProcessor:
         
         n_edited = len(edited_bib_db.entries)
         
-        self.logger.log(f'## number of entries (input) {n_bibtex_entries}')
-        self.logger.log(f'## number of duplicate entries (input) {n_duplicates}')
-        self.logger.log(f'## number of entries (output) {n_edited}')
+        self.logger.info(f'## number of entries (input) {n_bibtex_entries}')
+        self.logger.info(f'## number of duplicate entries (input) {n_duplicates}')
+        self.logger.info(f'## number of entries (output) {n_edited}')
         
         if n_edited + n_duplicates != n_bibtex_entries:
-            self.logger.log(
+            self.logger.info(
                 f'[WARNING]: The number of output entries is not same as the input: '
                 f'{n_edited} != {n_bibtex_entries + n_duplicates}'
             )
@@ -1682,7 +1838,7 @@ class BibtexProcessor:
     
     def split_output(self) -> None:
         """Split output into individual BibTeX files."""
-        self.logger.log(' ' + '-' * 42 + '------------------------------------------------#\n' + ' ' * 18 + ' {:<40}  ------------------------------------------------#'.format('10. Splitted bib entries'))
+        self.logger.info(' ' + '-' * 42 + '------------------------------------------------#\n' + ' ' * 18 + ' {:<40}  ------------------------------------------------#'.format('10. Splitted bib entries'))
         
         dir_name = 'splitted_bibtex_entries'
         if not os.path.exists(dir_name):
@@ -1712,18 +1868,18 @@ class BibtexProcessor:
             for line in list_bib_file:
                 f.write(f"{line}\n")
         
-        self.logger.log('splitted bib entries are in the folder: splitted_bibtex_entries')
-        self.logger.log('\\input(splitted_bib_entries.tex) to use it')
+        self.logger.info('splitted bib entries are in the folder: splitted_bibtex_entries')
+        self.logger.info('\\input(splitted_bib_entries.tex) to use it')
     
     def run(self) -> None:
         """Run the complete processing pipeline with error handling."""
         if not self.config.filename or not os.path.exists(self.config.filename):
-            self.logger.log(f'bib file {self.config.filename} does not exist')
+            self.logger.info(f'bib file {self.config.filename} does not exist')
             return
         
         # Load bib file
         header = ' ' + '-' * 42 + '------------------------------------------------#\n' + ' ' * 18 + ' {:<40}  ------------------------------------------------#'
-        self.logger.log(header.format('1. Parse input bibtex file'))
+        self.logger.info(header.format('1. Parse input bibtex file'))
         
         try:
             bib_database = BibtexIO.load(self.config.filename, self.logger)
@@ -1732,7 +1888,7 @@ class BibtexProcessor:
             raise BibtexParseError(f"Cannot parse {self.config.filename}: {e}") from e
         
         n_bibtex_entries = len(bib_database.entries)
-        self.logger.log(f'# number of entries (input) {n_bibtex_entries}')
+        self.logger.info(f'# number of entries (input) {n_bibtex_entries}')
         
         # Limit entries if needed
         if n_bibtex_entries > self.config.max_entry:
@@ -1743,7 +1899,7 @@ class BibtexProcessor:
         self.initialize_store(bib_database)
         
         # Step 2: Crossref DOI search
-        self.logger.log(header.format('2. Crossref doi search'))
+        self.logger.info(header.format('2. Crossref doi search'))
         try:
             bibtex_entries_to_crossref_dois(self.store, self.config, self.logger)
         except CrossrefAPIError as e:
@@ -1751,7 +1907,7 @@ class BibtexProcessor:
         self.save_cache()
         
         # Step 3: Get BibTeX entries from Crossref
-        self.logger.log(header.format('3. get bibtex from crossref'))
+        self.logger.info(header.format('3. get bibtex from crossref'))
         try:
             dois_to_bibtex_entries(self.store, self.config, self.logger)
         except CrossrefAPIError as e:
@@ -1759,7 +1915,7 @@ class BibtexProcessor:
         self.save_cache()
         
         # Step 4: Validate entries
-        self.logger.log(header.format('4. validation of crossref_bibtex_entry'))
+        self.logger.info(header.format('4. validation of crossref_bibtex_entry'))
         
         valid_crossref_bib_db = BibDatabase()
         
@@ -1767,7 +1923,7 @@ class BibtexProcessor:
         for key, entry_store in self.store.items():
             entry = entry_store.input
             entry_id = entry.get('ID')
-            self.logger.log(f'## entry {k}: {entry_id}')
+            self.logger.info(f'## entry {k}: {entry_id}')
             
             if entry_store.doi_to_bibtex_status == 'ok':
                 entry_store.crossref_bibtex_entry_key = entry_store.crossref_bibtex_entry.get('ID')
@@ -1778,7 +1934,7 @@ class BibtexProcessor:
                     self.config, self.decisions, self.logger
                 )
                 
-                self.logger.log(f'{status} {check}')
+                self.logger.info(f'{status} {check}')
                 entry_store.check = check
                 entry_store.found_doi_status = status
                 
@@ -1787,14 +1943,14 @@ class BibtexProcessor:
             else:
                 entry_store.found_doi_status = 'failed'
             
-            self.logger.log(f'validation results : {entry_store.found_doi_status}\n')
+            self.logger.info(f'validation results : {entry_store.found_doi_status}\n')
             k += 1
         
         # Remove duplicates
         n_duplicate = self.remove_duplicates()
         
         # Step 5: Query Unpaywall
-        self.logger.log(header.format('5. unpaywall oai from doi'))
+        self.logger.info(header.format('5. unpaywall oai from doi'))
         try:
             unpaywall_oais_from_crossref_dois(valid_crossref_bib_db.entries, self.store, self.config, self.logger)
         except UnpaywallAPIError as e:
@@ -1802,22 +1958,22 @@ class BibtexProcessor:
         self.save_cache()
         
         # Step 6: Build output entries
-        self.logger.log(header.format('6. build output bibtex entry'))
+        self.logger.info(header.format('6. build output bibtex entry'))
         ad_hoc_build_output_bibtex_entries(self.store, self.config, self.logger)
         
         # Step 7: Generate report
         self.generate_report()
         
         # Step 7b: Generate summary table of problematic entries
-        self.logger.log(' ' + '-' * 42 + '------------------------------------------------#\n' + ' ' * 18 + ' {:<40}  ------------------------------------------------#'.format('7b. Summary of problematic entries'))
+        self.logger.info(' ' + '-' * 42 + '------------------------------------------------#\n' + ' ' * 18 + ' {:<40}  ------------------------------------------------#'.format('7b. Summary of problematic entries'))
         self.generate_summary_table()
         
         # Step 8: Write output
-        self.logger.log(header.format('8. Write output bibtex file'))
+        self.logger.info(header.format('8. Write output bibtex file'))
         self.write_output(n_bibtex_entries, n_duplicate)
         
         # Step 9: Clean up (done in write_output)
-        self.logger.log(header.format('9. Replacements of Latex or html symbols'))
+        self.logger.info(header.format('9. Replacements of Latex or html symbols'))
         
         # Step 10: Split output if requested
         if self.config.split_output:
@@ -1825,7 +1981,7 @@ class BibtexProcessor:
         
         # Step 11: Print suggestions
         if self.decisions.has_decisions():
-            self.logger.log(header.format('11. Suggested command-line options'))
+            self.logger.info(header.format('11. Suggested command-line options'))
             self.decisions.print_suggestions(self.config, self.logger)
 
 
