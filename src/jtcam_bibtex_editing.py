@@ -410,10 +410,9 @@ def unpywall_query(title, is_oa):
             status = 'query none'
     except Exception as e:
         query = None
-        msg = '[warning]: Unpywall.query on title on unpaywall failed !!!' + e
+        msg = f'[warning]: Unpywall.query on title on unpaywall failed !!! {e}'
         print_verbose_level(msg)
         status = 'not found'
-        input()
     return query, msg, status
 
 
@@ -439,8 +438,9 @@ def unpywall_doi(doi):
             status = 'doi not found'
     except Exception as e:
         print_verbose_level('[warning]: Unpywall.doi  failed !!!', e)
-        msg = '{Unpywall.doi failed}' + e
+        msg = f'{{Unpywall.doi failed}}: {e}'
         status = 'doi failed'
+        query = None
 
     return query, msg, status
 
@@ -457,6 +457,9 @@ def unpaywall_get_oai_url(doi_query):
     """
     oai_url = 'oai url not found'
     status = 'oai url not found'
+
+    if doi_query is None:
+        return oai_url, status
 
     if doi_query.get('best_oa_location.url_for_pdf') is not None:
         if doi_query['best_oa_location.url_for_pdf'][0] is not None:
@@ -545,7 +548,6 @@ def unpaywall_oais_from_crossref_dois(entries, store):
                             doi_query.get('best_oa_location.url_for_landing_page')[0]
                         print('landing: ',
                               store[entry.get('ID')]['oai_url_for_landing_page'])
-
         cnt = cnt + 1
 
 
@@ -875,10 +877,12 @@ def ad_hoc_build_output_bibtex_entries(store):
                 store[key]['action'][0] = add_tag_doi_in_entry(
                     store[key]['found_doi'], output_bibtex_entry)
 
-                # print('#############', store[key]['unpaywall_status'])
-                # if store[key]['unpaywall_status'][1] == 'oai url found':
-                #     store[key]['action'][1] = add_tag_oai_url_in_entry(
-                #         store[key], output_bibtex_entry)
+                print('#############', store[key]['unpaywall_status'])
+                if store[key]['unpaywall_status'][0] == 'doi not found':
+                    pass
+                elif store[key]['unpaywall_status'][1] == 'oai url found':
+                    store[key]['action'][1] = add_tag_oai_url_in_entry(
+                        store[key], output_bibtex_entry)
 
                 complete_addendum_in_entry(output_bibtex_entry)
 
