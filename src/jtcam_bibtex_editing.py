@@ -41,6 +41,113 @@ from bibtexparser.bparser import BibTexParser
 from bibtexparser.bwriter import BibTexWriter
 from bibtexparser.bibdatabase import BibDatabase, as_text
 
+# HTTP requests for retry logic
+from requests.exceptions import HTTPError, ConnectionError, Timeout
+
+
+# =============================================================================
+# Custom Exceptions
+# =============================================================================
+
+class BibtexProcessingError(Exception):
+    """Base exception for BibTeX processing errors."""
+    pass
+
+
+class APIError(BibtexProcessingError):
+    """Base exception for API-related errors."""
+    
+    def __init__(self, message: str, status_code: Optional[int] = None, 
+                 retry_after: Optional[int] = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.retry_after = retry_after
+
+
+class CrossrefAPIError(APIError):
+    """Raised when Crossref API returns an error or request fails."""
+    pass
+
+
+class UnpaywallAPIError(APIError):
+    """Raised when Unpaywall API returns an error or request fails."""
+    pass
+
+
+class DOINotFoundError(CrossrefAPIError):
+    """Raised when a DOI cannot be found for a given entry."""
+    pass
+
+
+class BibtexParseError(BibtexProcessingError):
+    """Raised when BibTeX parsing fails."""
+    pass
+
+
+class ValidationError(BibtexProcessingError):
+    """Raised when entry validation fails critically."""
+    pass
+
+
+# =============================================================================
+# Retry Decorator
+# =============================================================================
+
+def retry_with_backoff(
+    max_retries: int = 3,
+    initial_delay: float = 1.0,
+    max_delay: float = 60.0,
+    exponential_base: float = 2.0,
+    exceptions: Tuple[type, ...] = (Exception,)
+):
+    """
+    Retry decorator with exponential backoff.
+    
+    Args:
+        max_retries: Maximum number of retry attempts
+        initial_delay: Initial delay between retries (seconds)
+        max_delay: Maximum delay between retries (seconds)
+        exponential_base: Base for exponential backoff calculation
+        exceptions: Tuple of exception types to catch and retry
+    """
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            delay = initial_delay
+            last_exception = None
+            
+            for attempt in range(max_retries + 1):
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    last_exception = e
+                    
+                    if attempt == max_retries:
+                        # Final attempt failed, re-raise
+                        raise last_exception
+                    
+                    # Log retry attempt
+                    logger = kwargs.get('logger')
+                    if logger:
+                        logger.log(
+                            f'[RETRY] {func.__name__} failed (attempt {attempt + 1}/{max_retries + 1}): {e}. '
+                            f'Retrying in {delay:.1f}s...'
+                        )
+                    else:
+                        print(
+                            f'[RETRY] {func.__name__} failed (attempt {attempt + 1}/{max_retries + 1}): {e}. '
+                            f'Retrying in {delay:.1f}s...',
+                            file=sys.stderr
+                        )
+                    
+                    time.sleep(delay)
+                    delay = min(delay * exponential_base, max_delay)
+            
+            # Should never reach here, but just in case
+            raise last_exception if last_exception else RuntimeError("Unexpected retry loop exit")
+        
+        return wrapper
+    return decorator
+
 
 # =============================================================================
 # Constants
@@ -339,6 +446,11 @@ from habanero import cn
 Crossref(mailto="jtcam@episciences.org")
 
 
+@retry_with_backoff(
+    max_retries=3,
+    initial_delay=2.0,
+    exceptions=(CrossrefAPIError, ConnectionError, Timeout)
+)
 def crossref_query(bibliographic: str, logger: Logger) -> Dict[str, Any]:
     """
     Query Crossref API for a bibliographic entry.
@@ -349,6 +461,9 @@ def crossref_query(bibliographic: str, logger: Logger) -> Dict[str, Any]:
         
     Returns:
         dict: Crossref API response
+        
+    Raises:
+        CrossrefAPIError: If the API request fails after all retries
     """
     logger.log(f'crossref query search starts on {bibliographic[:40]:40.40}...')
     cr = Crossref(
@@ -358,11 +473,30 @@ def crossref_query(bibliographic: str, logger: Logger) -> Dict[str, Any]:
 
     try:
         x = cr.works(query_bibliographic=bibliographic, limit=1)
+    except HTTPError as e:
+        status_code = e.response.status_code if hasattr(e, 'response') else None
+        if status_code == 429:  # Rate limited
+            retry_after = int(e.response.headers.get('Retry-After', 5))
+            logger.log(f'Rate limited by Crossref. Waiting {retry_after}s...')
+            time.sleep(retry_after)
+            raise CrossrefAPIError(
+                f"Rate limited (429)", status_code=429, retry_after=retry_after
+            ) from e
+        elif status_code == 503:  # Service unavailable
+            raise CrossrefAPIError(
+                f"Crossref service unavailable (503)", status_code=503
+            ) from e
+        else:
+            logger.log(f'HTTP error from Crossref: {e}')
+            x = {'status': 'bad', 'error': str(e), 'status_code': status_code}
+    except (ConnectionError, Timeout) as e:
+        logger.log(f'Connection error to Crossref: {e}')
+        raise CrossrefAPIError(f"Connection failed: {e}") from e
     except Exception as e:
-        x = {'status': 'bad'}
-        logger.log(f'exception is : {e}')
+        logger.log(f'Unexpected error querying Crossref: {e}')
+        x = {'status': 'bad', 'error': str(e)}
 
-    logger.log(f'crossref query search ends on {bibliographic[:40]:40.40} with status {x["status"]}')
+    logger.log(f'crossref query search ends on {bibliographic[:40]:40.40} with status {x.get("status", "unknown")}')
     return x
 
 
@@ -441,6 +575,11 @@ def bibtex_entries_to_crossref_dois(
 doi_to_bibtex_entry_server = 'doi.org'
 
 
+@retry_with_backoff(
+    max_retries=2,
+    initial_delay=1.0,
+    exceptions=(CrossrefAPIError, ConnectionError, Timeout)
+)
 def doi_to_crossref_bibtex_entry(doi: str, logger: Logger) -> Tuple[Optional[str], Optional[str], str]:
     """
     Get BibTeX entry from DOI using Crossref content negotiation.
@@ -459,11 +598,28 @@ def doi_to_crossref_bibtex_entry(doi: str, logger: Logger) -> Tuple[Optional[str
         bibtex_entry_str = cn.content_negotiation(ids=doi, format="bibentry")
         json_entry = cn.content_negotiation(ids=doi, format="citeproc-json")
         return bibtex_entry_str, json_entry, 'ok'
+    except HTTPError as e:
+        status_code = e.response.status_code if hasattr(e, 'response') else None
+        logger.warning(f'HTTP error from Crossref content negotiation: {e}')
+        if status_code == 404:
+            return None, None, 'not_found'
+        elif status_code == 429:
+            raise CrossrefAPIError(f"Rate limited (429)", status_code=429) from e
+        else:
+            return None, None, f'http_error_{status_code}'
+    except (ConnectionError, Timeout) as e:
+        logger.warning(f'Connection error to Crossref: {e}')
+        raise CrossrefAPIError(f"Connection failed: {e}") from e
     except Exception as e:
-        print(f'cn.content_negotiation exception: {e}')
-        return None, None, '!ok'
+        logger.warning(f'Unexpected error from Crossref content negotiation: {e}')
+        return None, None, f'error: {str(e)}'
 
 
+@retry_with_backoff(
+    max_retries=2,
+    initial_delay=1.0,
+    exceptions=(ConnectionError, Timeout, urllib.error.URLError)
+)
 def doi_to_doi_org_bibtex_entry(doi: str, logger: Logger) -> Tuple[Optional[str], Optional[str], str]:
     """
     Get BibTeX entry from DOI using doi.org content negotiation.
@@ -476,6 +632,7 @@ def doi_to_doi_org_bibtex_entry(doi: str, logger: Logger) -> Tuple[Optional[str]
         Tuple of (bibtex_entry_str, json_entry, status)
     """
     import urllib.request
+    import urllib.error
     logger.log(f'doi.org cn bibtex .... for {doi}')
 
     try:
@@ -483,20 +640,29 @@ def doi_to_doi_org_bibtex_entry(doi: str, logger: Logger) -> Tuple[Optional[str]
             url=f"https://doi.org/{doi}",
             headers={"Accept": "application/x-bibtex"}
         )
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
             bibtex_entry_str = response.read().decode('utf-8')
         
         req = urllib.request.Request(
             url=f"https://doi.org/{doi}",
             headers={"Accept": "application/vnd.citationstyles.csl+json"}
         )
-        with urllib.request.urlopen(req) as response:
+        with urllib.request.urlopen(req, timeout=30) as response:
             json_entry = response.read().decode('utf-8')
         
         return bibtex_entry_str, json_entry, 'ok'
-    except Exception as e:
-        print(f'doi.org exception: {e}')
-        return None, None, '!ok'
+    except urllib.error.HTTPError as e:
+        logger.warning(f'HTTP error from doi.org: {e.code} {e.reason}')
+        if e.code == 404:
+            return None, None, 'not_found'
+        else:
+            return None, None, f'http_error_{e.code}'
+    except urllib.error.URLError as e:
+        logger.warning(f'URL error from doi.org: {e.reason}')
+        raise ConnectionError(f"Failed to connect to doi.org: {e.reason}") from e
+    except TimeoutError as e:
+        logger.warning(f'Timeout error from doi.org')
+        raise Timeout("Request to doi.org timed out") from e
 
 
 def dois_to_bibtex_entries(
@@ -569,6 +735,11 @@ from unpywall import Unpywall
 UnpywallCredentials('vincent.acary@inria.fr')
 
 
+@retry_with_backoff(
+    max_retries=2,
+    initial_delay=1.0,
+    exceptions=(UnpaywallAPIError, ConnectionError, Timeout)
+)
 def unpywall_query(title: str, is_oa: bool, logger: Logger) -> Tuple[Optional[Any], str, str]:
     """
     Query Unpaywall API by title.
@@ -591,15 +762,33 @@ def unpywall_query(title: str, is_oa: bool, logger: Logger) -> Tuple[Optional[An
             msg = f'{{Unpywall.query on title returns None with is_oa={is_oa}}}'
             logger.log(msg)
             status = 'query none'
+    except HTTPError as e:
+        status_code = e.response.status_code if hasattr(e, 'response') else None
+        query = None
+        msg = f'[warning]: Unpywall.query HTTP error {status_code}: {e}'
+        logger.log(msg)
+        if status_code == 429:
+            raise UnpaywallAPIError(f"Rate limited (429)", status_code=429) from e
+        status = f'http_error_{status_code}'
+    except (ConnectionError, Timeout) as e:
+        query = None
+        msg = f'[warning]: Unpywall.query connection error: {e}'
+        logger.log(msg)
+        raise UnpaywallAPIError(f"Connection failed: {e}") from e
     except Exception as e:
         query = None
-        msg = f'[warning]: Unpywall.query on title on unpaywall failed !!! {e}'
+        msg = f'[warning]: Unpywall.query unexpected error: {e}'
         logger.log(msg)
-        status = 'not found'
+        status = f'error: {str(e)[:50]}'
     
     return query, msg, status
 
 
+@retry_with_backoff(
+    max_retries=3,
+    initial_delay=1.0,
+    exceptions=(UnpaywallAPIError, ConnectionError, Timeout)
+)
 def unpywall_doi(doi: str, logger: Logger) -> Tuple[Optional[Any], str, str]:
     """
     Query Unpaywall API by DOI.
@@ -620,10 +809,27 @@ def unpywall_doi(doi: str, logger: Logger) -> Tuple[Optional[Any], str, str]:
             logger.log('[error]: doi query on unpaywall is None !!!')
             msg = '{Unpywall.doi returns None}'
             status = 'doi not found'
+    except HTTPError as e:
+        status_code = e.response.status_code if hasattr(e, 'response') else None
+        logger.warning(f'HTTP error from Unpaywall DOI query: {status_code}')
+        if status_code == 404:
+            msg = '{DOI not found in Unpaywall}'
+            status = 'doi_not_found'
+        elif status_code == 429:
+            msg = '{Rate limited by Unpaywall}'
+            status = 'rate_limited'
+            raise UnpaywallAPIError(f"Rate limited (429)", status_code=429) from e
+        else:
+            msg = f'{{Unpywall.doi HTTP error {status_code}}}'
+            status = f'http_error_{status_code}'
+        query = None
+    except (ConnectionError, Timeout) as e:
+        logger.warning(f'Connection error to Unpaywall: {e}')
+        raise UnpaywallAPIError(f"Connection failed: {e}") from e
     except Exception as e:
-        logger.log(f'[warning]: Unpywall.doi failed !!! {e}')
-        msg = f'{{Unpywall.doi failed}}: {e}'
-        status = 'doi failed'
+        logger.warning(f'Unexpected error from Unpaywall: {e}')
+        msg = f'{{Unpywall.doi failed}}: {str(e)[:100]}'
+        status = 'doi_failed'
         query = None
 
     return query, msg, status
@@ -1510,7 +1716,7 @@ class BibtexProcessor:
         self.logger.log('\\input(splitted_bib_entries.tex) to use it')
     
     def run(self) -> None:
-        """Run the complete processing pipeline."""
+        """Run the complete processing pipeline with error handling."""
         if not self.config.filename or not os.path.exists(self.config.filename):
             self.logger.log(f'bib file {self.config.filename} does not exist')
             return
@@ -1519,7 +1725,12 @@ class BibtexProcessor:
         header = ' ' + '-' * 42 + '------------------------------------------------#\n' + ' ' * 18 + ' {:<40}  ------------------------------------------------#'
         self.logger.log(header.format('1. Parse input bibtex file'))
         
-        bib_database = BibtexIO.load(self.config.filename, self.logger)
+        try:
+            bib_database = BibtexIO.load(self.config.filename, self.logger)
+        except Exception as e:
+            self.logger.warning(f'Failed to load BibTeX file: {e}')
+            raise BibtexParseError(f"Cannot parse {self.config.filename}: {e}") from e
+        
         n_bibtex_entries = len(bib_database.entries)
         self.logger.log(f'# number of entries (input) {n_bibtex_entries}')
         
@@ -1533,12 +1744,18 @@ class BibtexProcessor:
         
         # Step 2: Crossref DOI search
         self.logger.log(header.format('2. Crossref doi search'))
-        bibtex_entries_to_crossref_dois(self.store, self.config, self.logger)
+        try:
+            bibtex_entries_to_crossref_dois(self.store, self.config, self.logger)
+        except CrossrefAPIError as e:
+            self.logger.warning(f'Crossref API error during DOI search: {e}')
         self.save_cache()
         
         # Step 3: Get BibTeX entries from Crossref
         self.logger.log(header.format('3. get bibtex from crossref'))
-        dois_to_bibtex_entries(self.store, self.config, self.logger)
+        try:
+            dois_to_bibtex_entries(self.store, self.config, self.logger)
+        except CrossrefAPIError as e:
+            self.logger.warning(f'Crossref API error during BibTeX fetch: {e}')
         self.save_cache()
         
         # Step 4: Validate entries
@@ -1578,7 +1795,10 @@ class BibtexProcessor:
         
         # Step 5: Query Unpaywall
         self.logger.log(header.format('5. unpaywall oai from doi'))
-        unpaywall_oais_from_crossref_dois(valid_crossref_bib_db.entries, self.store, self.config, self.logger)
+        try:
+            unpaywall_oais_from_crossref_dois(valid_crossref_bib_db.entries, self.store, self.config, self.logger)
+        except UnpaywallAPIError as e:
+            self.logger.warning(f'Unpaywall API error: {e}')
         self.save_cache()
         
         # Step 6: Build output entries
@@ -1614,10 +1834,22 @@ class BibtexProcessor:
 # =============================================================================
 
 def main():
-    """Main entry point."""
-    config = Config.from_command_line(sys.argv)
-    processor = BibtexProcessor(config)
-    processor.run()
+    """Main entry point with error handling."""
+    try:
+        config = Config.from_command_line(sys.argv)
+        processor = BibtexProcessor(config)
+        processor.run()
+    except KeyboardInterrupt:
+        print("\n\n[INFO] Processing interrupted by user.", file=sys.stderr)
+        sys.exit(130)
+    except BibtexProcessingError as e:
+        print(f"\n\n[ERROR] Processing failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n\n[ERROR] Unexpected error: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
 
 if __name__ == '__main__':
