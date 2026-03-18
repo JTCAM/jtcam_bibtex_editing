@@ -180,8 +180,7 @@ def crossref_query(bibliographic):
         'crossref query search starts on {:40.40}...'.format(bibliographic))
     cr = Crossref(
         base_url="https://api.crossref.org",
-        mailto="jtcam@episciences.org",
-        timeout= 30
+        mailto="jtcam@episciences.org"
     )
 
     try:
@@ -290,40 +289,49 @@ def doi_to_crossref_bibtex_entry(doi):
     except Exception as e:
         print('cn.content_negotiation exception', e)
         return None, None, '!ok'
-    print('ok')
-    
+
     return bibtex_entry_str, json_entry, 'ok'
 
 
-import requests
 def doi_to_doi_org_bibtex_entry(doi):
-    print_verbose_level('doi.org query for  bibtex entry  .... for ', doi)
-    url = f"https://doi.org/{doi}"
+    """
+    Get BibTeX entry from DOI using doi.org content negotiation.
+    
+    Args:
+        doi: DOI string
+        
+    Returns:
+        tuple: (bibtex_entry_str, json_entry, status)
+    """
+    import urllib.request
+    print_verbose_level('doi.org cn bibtex  .... for ', doi)
 
-    headers = {"Accept": "application/x-bibtex"}
     try:
-        r = requests.get(url, headers=headers, timeout=20)
-        bibtex_entry_str = r.text
-        #print(r.text)
-        #print(r)
-        headers = {"Accept": "application/vnd.citationstyles.csl+json"}
-        r1 = requests.get(url, headers=headers, timeout=20)
-        #print(type(r1.json()))
-        json_entry = r1.json()
-        #print(json_entry)
-
+        req = urllib.request.Request(
+            url="https://doi.org/" + doi,
+            headers={"Accept": "application/x-bibtex"}
+        )
+        with urllib.request.urlopen(req) as response:
+            bibtex_entry_str = response.read().decode('utf-8')
+        req = urllib.request.Request(
+            url="https://doi.org/" + doi,
+            headers={"Accept": "application/vnd.citationstyles.csl+json"}
+        )
+        with urllib.request.urlopen(req) as response:
+            json_entry = response.read().decode('utf-8')
     except Exception as e:
-        print('cn.content_negotiation exception', e)
+        print('doi.org exception', e)
         return None, None, '!ok'
 
     return bibtex_entry_str, json_entry, 'ok'
+
 
 def dois_to_bibtex_entries(store):
     """
     Fetch BibTeX entries for all DOIs in the store.
     
     Args:
-        store: Dictionary containing entry data with crossref_doi
+        store: Dictionary containing entry data with found_doi
     """
     print_verbose_level('dois_to_bibtex_entries  ....')
     store_search = {}
@@ -347,11 +355,10 @@ def dois_to_bibtex_entries(store):
             results = Parallel(n_jobs=n_jobs)(
                 delayed(doi_to_doi_org_bibtex_entry)(store[key]['found_doi'])
                 for key in store_search)
-        elif doi_to_bibtex_entry_server == 'crossref':
+        else:
             results = Parallel(n_jobs=n_jobs)(
                 delayed(doi_to_crossref_bibtex_entry)(store[key]['found_doi'])
                 for key in store_search)
- 
     t.stop()
 
     for cnt, key in enumerate(store_search):
@@ -367,7 +374,7 @@ def dois_to_bibtex_entries(store):
             if entry_nb == 0:
                 store[key]['doi_to_bibtex_status'] = '!ok'
                 print_verbose_level(
-                    'WARNING:    bad format for bibtex from server (crossref or doi.org)',
+                    'WARNING:    bad format for bibtex from crossref',
                     store[key]['input']['ID'])
             else:
                 for e in bib_database.entries:
@@ -548,7 +555,13 @@ def unpaywall_oais_from_crossref_dois(entries, store):
                             doi_query.get('best_oa_location.url_for_landing_page')[0]
                         print('landing: ',
                               store[entry.get('ID')]['oai_url_for_landing_page'])
+
         cnt = cnt + 1
+
+
+# Global lists to store user decisions during interactive mode
+user_forced_entries = []
+user_skipped_entries = []
 
 
 def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
@@ -567,9 +580,9 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
             status: 'valid', '!valid', 'skipped', or 'valid forced'
             check_details: String describing what was checked
     """
-    flag_skip = input_bibtex_entry.get('ID') in opts.skip_double_check
-    flag_forced_valid = input_bibtex_entry.get(
-        'ID') in opts.forced_valid_crossref_entry
+    entry_id = input_bibtex_entry.get('ID')
+    flag_skip = entry_id in opts.skip_double_check
+    flag_forced_valid = entry_id in opts.forced_valid_crossref_entry
 
     check = ''
     flag = True
@@ -583,7 +596,7 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
             '[Warning] input_bibtex_entry type are different.',
             input_bibtex_entry.get('ENTRYTYPE'),
             crossref_bibtex_entry.get('ENTRYTYPE'))
-        print('| ', input_bibtex_entry.get('ID'), ' | type are different | ' )
+        print('| ', entry_id, ' | type are different | ' )
 
     # Check year
     year_1_text = input_bibtex_entry.get('year', '')
@@ -602,7 +615,7 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
         print_verbose_level(
             '[Warning] years are different.\n year in input bibtex :',
             year_1_text, '\n year crossref bibtex :', year_2_text)
-        print('\n| ', input_bibtex_entry.get('ID'), ' | years are different |\n ' )
+        print('\n| ', entry_id, ' | years are different |\n ' )
     elif year_2_text == '':
         check += 'year: none(2)'
     elif year_1_text == '':
@@ -631,7 +644,7 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
         check += 'title: ok- '
         flag = flag and True
         print_verbose_level('[Warning] small difference in title', intersection)
-        print('| ', input_bibtex_entry.get('ID'), '\n| small difference in title  |\n' )
+        print('| ', entry_id, '\n| small difference in title  |\n' )
     else:
         check += 'title: !ok '
         flag = flag and False
@@ -641,7 +654,7 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
             print_verbose_level('[Warning] title in crossref bibtex:\n',
                                 document_2_text, '\n')
             print('difference: ', intersection, len(intersection))
-            print('\n| ', input_bibtex_entry.get('ID'), ' | title are different |\n' )
+            print('\n| ', entry_id, ' | title are different |\n' )
             
     if not flag and opts.stop_on_bad_check:
         print_verbose_level('input bibtex entry :')
@@ -658,9 +671,39 @@ def double_check_bibtex_entries(input_bibtex_entry, crossref_bibtex_entry):
         print_verbose_level(
             'hints: you may manually add crossref_doi ={foo} in the input entry '
             'of the bibtex file to fix the issue ')
+        
+        # Interactive menu for handling invalid entries
         if opts.stop_on_bad_check and not flag_skip and not flag_forced_valid:
-            print_verbose_level('press a key to continue')
-            input()
+            print("\n" + "="*60)
+            print(f"Entry '{entry_id}' validation failed.")
+            print("="*60)
+            print("Options:")
+            print("  [f]orce - Force validation (use Crossref entry)")
+            print("  [s]kip  - Skip double check (keep input entry)")
+            print("  [c]ontinue - Do nothing and continue")
+            print("="*60)
+            
+            while True:
+                try:
+                    choice = input("Your choice [f/s/c]: ").strip().lower()
+                    if choice in ['f', 'force']:
+                        flag_forced_valid = True
+                        user_forced_entries.append(entry_id)
+                        print(f"  -> Entry '{entry_id}' will be forced valid.")
+                        break
+                    elif choice in ['s', 'skip']:
+                        flag_skip = True
+                        user_skipped_entries.append(entry_id)
+                        print(f"  -> Entry '{entry_id}' will be skipped.")
+                        break
+                    elif choice in ['c', 'continue', '']:
+                        print(f"  -> Continuing without changes.")
+                        break
+                    else:
+                        print("Invalid choice. Please enter 'f', 's', or 'c'.")
+                except (EOFError, KeyboardInterrupt):
+                    print("\n  -> Continuing without changes.")
+                    break
 
     if flag:
         status = 'valid'
@@ -750,7 +793,6 @@ def complete_addendum_in_entry(entry):
         if entry.get('addendum_item'):
             entry['addendum_item'].append(addendum)
             print('addendum[item]', entry.get('addendum_item'))
-        input()
     if entry.get('addendum_item'):
         entry['addendum'] = ', '.join(entry['addendum_item'])
         entry.pop('addendum_item')
@@ -787,12 +829,14 @@ def astyle_author_crossref_json(json_entry):
     Returns:
         str: Formatted author string
     """
-    
-    if doi_to_bibtex_entry_server == 'doi.org':
-        d=json_entry
+    if doi_to_bibtex_entry_server == 'doi.org' :
+        d = json.loads(json_entry)
     else:
         d = json.loads(json_entry)
 
+
+    
+    
     
     author = d['author']
     author_bibtex = []
@@ -839,11 +883,11 @@ def ad_hoc_build_output_bibtex_entries(store):
         writer = BibTexWriter()
         db = BibDatabase()
         db.entries.append(input_bibtex_entry)
-        print_verbose_level('Original input bibtex entry: \n', writer.write(db))
+        #print_verbose_level('Original input bibtex entry: \n', writer.write(db))
         writer = BibTexWriter()
         db = BibDatabase()
         db.entries.append(crossref_bibtex_entry)
-        print_verbose_level('crossref bibtex entry: \n', writer.write(db))
+        #print_verbose_level('crossref bibtex entry: \n', writer.write(db))
 
         store[key]['action'] = ['', '']
 
@@ -877,10 +921,7 @@ def ad_hoc_build_output_bibtex_entries(store):
                 store[key]['action'][0] = add_tag_doi_in_entry(
                     store[key]['found_doi'], output_bibtex_entry)
 
-                print('#############', store[key]['unpaywall_status'])
-                if store[key]['unpaywall_status'][0] == 'doi not found':
-                    pass
-                elif store[key]['unpaywall_status'][1] == 'oai url found':
+                if store[key]['unpaywall_status'][1] == 'oai url found':
                     store[key]['action'][1] = add_tag_oai_url_in_entry(
                         store[key], output_bibtex_entry)
 
@@ -902,8 +943,8 @@ def ad_hoc_build_output_bibtex_entries(store):
         writer = BibTexWriter()
         db = BibDatabase()
         db.entries.append(output_bibtex_entry)
-        print_verbose_level('output edited bibtex entry: \n', writer.write(db))
-        print('------')
+        # print_verbose_level('output edited bibtex entry: \n', writer.write(db))
+        # print('------')
 
         k = k + 1
 
@@ -1158,6 +1199,42 @@ for key in store:
                                               str(store[key].get('unpaywall_msg'))))
     e_idx = e_idx + 1
 
+
+fmt_string_2 = '| {:<40} | {:<20} | {:<60} | {:} | {:} | {:<10} | '
+print("|-")
+print(fmt_string_2.format( 'Id',
+                                 'found doi status',
+                                 'check',
+                                 'forced ',
+                                 'skip' ,
+                                 'comment ' ))
+print("|-")
+for key in store:
+    entry_id = store[key]['input'].get('ID')
+
+    test_forced =  ( entry_id in opts.forced_valid_crossref_entry)  or (entry_id in user_forced_entries)
+    test_skipped =  ( entry_id in opts.skip_double_check) or (entry_id in user_skipped_entries)
+    
+    if store[key].get('duplicate', False):
+        print(fmt_string_2.format(str(entry_id),
+                                      'duplicate',
+                                      '',
+                                      '',
+                                      '',
+                                      ''))
+    elif (store[key]['found_doi_status'] == '!valid')  or test_forced or test_skipped: 
+        print(fmt_string_2.format( entry_id,
+                                   str(store[key]['found_doi_status']),
+                                   str(store[key].get('check')),
+                                   bool(test_forced),
+                                   test_skipped,
+                                   ' ' )) 
+    e_idx = e_idx + 1
+
+print("|-")
+print("\n")
+
+    
 # =============================================================================
 # 8. Write output BibTeX file
 # =============================================================================
@@ -1219,8 +1296,8 @@ def replace_curious_character(output_file):
         for line in lines:
             line_replacement = line
             if item[0] in line:
-                print('Match Found. replace ', item[0], ' by ', item[1],
-                      '  in', line)
+                #print('Match Found. replace ', item[0], ' by ', item[1],
+                #      '  in', line)
                 line_replacement = line.replace(item[0], item[1])
             new_lines.append(line_replacement)
         f = open(output_file, "w", encoding="utf-8")
@@ -1282,3 +1359,37 @@ if opts.split_output:
 
     print_verbose_level('splitted bib entries are in the folder : splitted_bibtex_entries ')
     print_verbose_level('\\input(splitted_bib_entries.tex) to use it')
+
+
+# =============================================================================
+# 11. Suggest command-line options based on user decisions
+# =============================================================================
+# Note: This section MUST be at the very end of the script
+if user_forced_entries or user_skipped_entries:
+    print_verbose_level(format_verbose_header.format('11. Suggested command-line options'))
+    
+    print("\nBased on your interactive choices, you can use these options for future runs:")
+    print("\n" + "="*70)
+    
+    if user_forced_entries:
+        forced_list = ','.join(user_forced_entries)
+        print(f"\n# Force validation for these entries:")
+        print(f"--forced-valid-crossref-entry={forced_list}")
+    
+    if user_skipped_entries:
+        skipped_list = ','.join(user_skipped_entries)
+        print(f"\n# Skip double-check for these entries:")
+        print(f"--skip-double-check={skipped_list}")
+    
+    # Combined command suggestion
+    print(f"\n# Combined command:")
+    cmd_parts = [sys.argv[0]]
+    cmd_parts.append("--forced-valid-crossref-entry --stop-on-bad-check --keep-entry= ")
+    if user_forced_entries:
+        cmd_parts.append(f"--forced-valid-crossref-entry={','.join(user_forced_entries)}")
+    if user_skipped_entries:
+        cmd_parts.append(f"--skip-double-check={','.join(user_skipped_entries)}")
+    cmd_parts.append(opts.filename)
+    print(" ".join(cmd_parts))
+    
+    print("\n" + "="*70)
